@@ -1,6 +1,6 @@
 """Head pose estimation module for MirrorFit XR.
 
-Computes 3D head orientation (Yaw, Pitch, Roll) and 6-DOF translation
+Computes 6-DOF 3D head orientation (Yaw, Pitch, Roll) and translation
 using OpenCV solvePnP and canonical anthropometric 3D facial landmarks.
 """
 
@@ -27,16 +27,17 @@ class HeadPoseResult:
 class HeadPoseEstimator:
     """Estimates 6-DOF head pose from 2D facial landmarks using perspective-n-point."""
 
-    # Canonical 3D anthropometric face model landmarks in millimeters (OpenCV coordinate frame: +X right, +Y down, +Z forward)
+    # Canonical 3D anthropometric face model in millimeters.
+    # Coordinate system aligned with camera frame (+X right, +Y down, +Z away into head):
     # Origin (0,0,0) is at the tip of the nose
     CANONICAL_3D_MODEL = np.array([
         [0.0, 0.0, 0.0],          # Nose tip (MediaPipe 4)
-        [0.0, 85.0, -25.0],       # Chin (MediaPipe 152)
-        [-65.0, -40.0, -40.0],    # Left eye outer corner
-        [65.0, -40.0, -40.0],     # Right eye outer corner
-        [-45.0, 45.0, -35.0],     # Left mouth corner
-        [45.0, 45.0, -35.0],      # Right mouth corner
-        [0.0, -45.0, -30.0],      # Glabella / nose saddle (MediaPipe 168)
+        [0.0, 75.0, 15.0],        # Chin (MediaPipe 152)
+        [-65.0, -32.0, 30.0],     # Left eye outer corner
+        [65.0, -32.0, 30.0],      # Right eye outer corner
+        [-38.0, 40.0, 15.0],      # Left mouth corner
+        [38.0, 40.0, 15.0],       # Right mouth corner
+        [0.0, -32.0, 15.0],       # Glabella / nose saddle (MediaPipe 168)
     ], dtype=np.float64)
 
     # Corresponding MediaPipe landmark indices
@@ -71,11 +72,7 @@ class HeadPoseEstimator:
 
     @staticmethod
     def get_camera_matrix(width: int, height: int) -> Tuple[np.ndarray, np.ndarray]:
-        """Construct intrinsic camera calibration matrix based on image dimensions.
-
-        In the absence of calibrated hardware parameters, focal length is approximated
-        equal to frame width (typical for standard ~65° FOV webcams).
-        """
+        """Construct intrinsic camera calibration matrix based on image dimensions."""
         focal_length = float(width)
         center_x = float(width) / 2.0
         center_y = float(height) / 2.0
@@ -86,7 +83,6 @@ class HeadPoseEstimator:
             [0.0, 0.0, 1.0],
         ], dtype=np.float64)
 
-        # Assume minimal radial/tangential lens distortion for standard webcams
         dist_coeffs = np.zeros((4, 1), dtype=np.float64)
         return camera_matrix, dist_coeffs
 
@@ -160,6 +156,10 @@ class HeadPoseEstimator:
         R, _ = cv2.Rodrigues(rvec)
 
         # Extract Euler angles (in degrees)
+        # Note: In our aligned frame (+X right, +Y down, +Z into scene):
+        # Yaw: rotation around Y axis
+        # Pitch: rotation around X axis
+        # Roll: rotation around Z axis
         sy = np.sqrt(R[0, 0] ** 2 + R[1, 0] ** 2)
         if sy > 1e-6:
             pitch = float(np.degrees(np.arctan2(R[2, 1], R[2, 2])))
@@ -210,7 +210,7 @@ class HeadPoseEstimator:
         if dist_coeffs is None:
             dist_coeffs = np.zeros((4, 1))
 
-        # Origin and 3 axis endpoints in 3D (Z points forward out from nose)
+        # Origin and 3 axis endpoints in 3D (Z points forward out from nose towards camera)
         axis_3d = np.array([
             [0.0, 0.0, 0.0],
             [length, 0.0, 0.0],    # X axis: Red (Lateral Right)
@@ -224,8 +224,8 @@ class HeadPoseEstimator:
         pt_y = tuple(np.round(img_pts[2].ravel()).astype(int))
         pt_z = tuple(np.round(img_pts[3].ravel()).astype(int))
 
-        # Draw lines: X (Red), Y (Green), Z (Blue/Cyan)
+        # Draw lines: X (Red), Y (Green), Z (Cyan/Blue)
         cv2.line(frame, origin, pt_x, (0, 0, 255), 3, cv2.LINE_AA)      # Red
         cv2.line(frame, origin, pt_y, (0, 255, 0), 3, cv2.LINE_AA)      # Green
-        cv2.line(frame, origin, pt_z, (255, 200, 0), 3, cv2.LINE_AA)    # Blue/Cyan
+        cv2.line(frame, origin, pt_z, (255, 200, 0), 3, cv2.LINE_AA)    # Cyan/Blue
         cv2.circle(frame, origin, 4, (255, 255, 255), -1, cv2.LINE_AA)

@@ -31,27 +31,28 @@ class FittingEngine:
     Mathematical Transformation Pipeline:
     1. Local Accessory Frame: Origin (0,0,0) is centered at the glasses nose saddle.
     2. Head Pose Alignment: Head pose estimation gives (R_head, t_head) relative to camera.
-    3. Anatomical Offset: Glasses anchor is positioned at the glabella / nose bridge.
+    3. Anatomical Anchor: Glasses anchor is positioned at the glabella / nose saddle (Y = -32mm, Z = +15mm).
        t_accessory = t_head + R_head * [offset_x, offset_y, offset_z]^T
-    4. Proportional Scaling: Scales accessory matching detected face size and Interpupillary Distance.
+    4. Proportional Scaling: Scales accessory matching detected face dimensions.
     5. Homogeneous Composition:
        T_model_to_cam = [ R_head * S   t_accessory ]
                         [    0              1      ]
     """
 
     # Anthropometric offset from nose tip (solvePnP origin) to glabella / glasses rest (in mm)
-    DEFAULT_BRIDGE_OFFSET_MM = np.array([0.0, -42.0, -28.0], dtype=np.float64)
+    # Aligned with canonical frame: -Y is up towards forehead, +Z is recessed into face
+    DEFAULT_BRIDGE_OFFSET_MM = np.array([0.0, -32.0, 15.0], dtype=np.float64)
 
     def __init__(
         self,
-        base_model_width_mm: float = 140.0,
+        base_model_width_mm: float = 130.0,
         vertical_offset_mm: float = 0.0,
         depth_offset_mm: float = 0.0,
     ) -> None:
         """Initialize fitting engine.
 
         Args:
-            base_model_width_mm: Natural width of the 3D model in millimeters (standard adult frames ~140mm).
+            base_model_width_mm: Natural width of the 3D model in millimeters (standard adult frames ~130mm).
             vertical_offset_mm: Fine vertical adjustment along face Y axis.
             depth_offset_mm: Fine depth adjustment along face Z axis.
         """
@@ -65,6 +66,7 @@ class FittingEngine:
         pixel_landmarks: np.ndarray,
         frame_shape: Tuple[int, int],
         model_scale_factor: float = 1.0,
+        focal_length: Optional[float] = None,
     ) -> FittingResult:
         """Calculate transformation matrix and projection parameters for 3D accessory.
 
@@ -73,6 +75,7 @@ class FittingEngine:
             pixel_landmarks: 2D pixel coordinates of facial landmarks.
             frame_shape: (height, width) of the video frame.
             model_scale_factor: User-adjustable scale multiplier.
+            focal_length: Optional camera focal length in pixels for distance-invariant scaling.
 
         Returns:
             FittingResult with homogeneous matrix and OpenCV projection vectors.
@@ -99,10 +102,17 @@ class FittingEngine:
         # t_acc_cam = t_head + R_head * local_offset
         t_accessory = t_head + (R_head @ local_offset)
 
-        # Uniform model scale:
-        # Standard human adult face temple span is ~135-145mm.
-        # We scale relative to base model width
+        # Proportional scale based on user's eye and face dimensions:
         scale = float(model_scale_factor)
+        if focal_length and pose.tvec[2, 0] > 100.0 and len(pixel_landmarks) > 263:
+            p_left = pixel_landmarks[33][:2]
+            p_right = pixel_landmarks[263][:2]
+            d_eyes_px = float(np.linalg.norm(p_right - p_left))
+            if d_eyes_px > 10.0:
+                # 3D outer eye distance in mm (canonical adult model is ~95mm)
+                eye_dist_3d = (d_eyes_px * pose.tvec[2, 0]) / focal_length
+                scale_ratio = eye_dist_3d / 95.0
+                scale = float(np.clip(scale_ratio * model_scale_factor, 0.85, 1.25))
 
         # Build 4x4 homogeneous transformation matrix
         model_matrix = np.eye(4, dtype=np.float64)

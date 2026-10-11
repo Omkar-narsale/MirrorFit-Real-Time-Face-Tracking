@@ -104,6 +104,7 @@ class MirrorFitApp:
         pose: HeadPoseResult,
         anchors: Optional[TryOnAnchors],
         accessory_name: str,
+        renderer_3d: Optional[Renderer3D] = None,
     ) -> None:
         """Render a clean, modern computer vision HUD on the frame."""
         if not self.show_hud:
@@ -130,8 +131,16 @@ class MirrorFitApp:
         # -------------------------------------------------------------
         # 2. Application Title & Mode Tag
         # -------------------------------------------------------------
-        mode_badge = "3D AR" if self.use_3d_mode else "2D OVERLAY"
-        mode_color = (0, 220, 255) if self.use_3d_mode else (220, 160, 40)
+        if self.use_3d_mode:
+            if renderer_3d and renderer_3d.wireframe_only:
+                mode_badge = "3D AR (WIREFRAME)"
+                mode_color = (120, 220, 255)
+            else:
+                mode_badge = "3D AR (SOLID MESH)"
+                mode_color = (0, 220, 255)
+        else:
+            mode_badge = f"2D: {accessory_name.upper()}"
+            mode_color = (220, 160, 40)
         title_text = "MirrorFit XR"
 
         cv2.putText(
@@ -147,15 +156,17 @@ class MirrorFitApp:
 
         # Mode pill
         (t_w, _), _ = cv2.getTextSize(title_text, cv2.FONT_HERSHEY_DUPLEX, 0.75, 1)
+        (mb_w, _), _ = cv2.getTextSize(mode_badge, cv2.FONT_HERSHEY_SIMPLEX, 0.44, 1)
         pill_x = 20 + t_w + 14
-        cv2.rectangle(frame, (pill_x, 16), (pill_x + 105, 42), (35, 40, 50), -1)
-        cv2.rectangle(frame, (pill_x, 16), (pill_x + 105, 42), mode_color, 1)
+        pill_w = max(110, mb_w + 20)
+        cv2.rectangle(frame, (pill_x, 16), (pill_x + pill_w, 42), (35, 40, 50), -1)
+        cv2.rectangle(frame, (pill_x, 16), (pill_x + pill_w, 42), mode_color, 1)
         cv2.putText(
             frame,
             mode_badge,
             (pill_x + 10, 34),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.45,
+            0.44,
             mode_color,
             1,
             cv2.LINE_AA,
@@ -230,11 +241,20 @@ class MirrorFitApp:
         # -------------------------------------------------------------
         telemetry_y = header_height + 26
         if is_detected and pose.is_valid:
-            active_item = "3D Aviator Model" if self.use_3d_mode else accessory_name
+            if self.use_3d_mode:
+                wf_mode = "Wireframe" if (renderer_3d and renderer_3d.wireframe_only) else "Solid"
+                active_item = f"3D Aviator ({wf_mode})"
+                num_v = len(renderer_3d.model.vertices) if (renderer_3d and renderer_3d.model) else 0
+                num_f = len(renderer_3d.model.faces) if (renderer_3d and renderer_3d.model) else 0
+                model_stat = f"3D Mesh: OK ({num_v}v/{num_f}f)" if (renderer_3d and renderer_3d.is_available) else "3D: Fallback"
+            else:
+                active_item = f"2D Style ({accessory_name})"
+                model_stat = "2D PNG"
+
             seg_info = f"Seg: {metrics.segmentation_latency_ms:.1f}ms" if self.show_segmentation else "Seg: OFF"
             telemetry_text = (
                 f"Pose: Yaw {pose.yaw_deg:+.1f} deg  Pitch {pose.pitch_deg:+.1f} deg  Roll {pose.roll_deg:+.1f} deg  |  "
-                f"Item: {active_item}  |  {seg_info}"
+                f"{active_item}  |  {model_stat}  |  {seg_info}"
             )
         else:
             telemetry_text = "Tracking paused (waiting for face)"
@@ -303,8 +323,10 @@ class MirrorFitApp:
         # -------------------------------------------------------------
         # 7. Bottom Navigation & Keyboard Controls Footer
         # -------------------------------------------------------------
+        wf_stat = "ON" if (renderer_3d and renderer_3d.wireframe_only) else "OFF"
         footer_text = (
             f"[T] Mode: {'3D' if self.use_3d_mode else '2D'}  |  "
+            f"[W] Wire: {wf_stat}  |  "
             f"[X] Axes: {'ON' if self.show_pose_axes else 'OFF'}  |  "
             f"[B] Mask: {'ON' if self.show_segmentation else 'OFF'}  |  "
             "[1-4/N/P] 2D Styles  |  "
@@ -386,7 +408,7 @@ class MirrorFitApp:
         cam_matrix, dist_coeffs = HeadPoseEstimator.get_camera_matrix(actual_w, actual_h)
 
         print(f"[MirrorFit XR] Camera started successfully at {actual_w}x{actual_h} resolution.")
-        print("[MirrorFit XR] Controls: [T] Toggle 3D/2D, [X] 3D Axes, [B] Segmentation, [S] Screenshot, [Q] Exit.\n")
+        print("[MirrorFit XR] Controls: [T] Toggle 3D/2D, [W] Wireframe, [X] 3D Axes, [B] Segmentation, [1-4/N/P] 2D Styles, [S] Screenshot, [R] Reset, [Q] Exit.\n")
 
         cv2.namedWindow(self.WINDOW_NAME, cv2.WINDOW_AUTOSIZE)
 
@@ -432,24 +454,27 @@ class MirrorFitApp:
                     # 5. Accessory Fitting & Rendering (3D vs 2D)
                     t_rend = time.perf_counter()
                     if self.show_glasses:
-                        if self.use_3d_mode and renderer_3d.is_available and pose_res.is_valid:
-                            # 3D AR Model Rendering Path
-                            fitting_res = fitting_engine.compute_fitting(
-                                pose=pose_res,
-                                pixel_landmarks=pixel_coords,
-                                frame_shape=(actual_h, actual_w),
-                            )
-                            renderer_3d.render(frame, fitting_res, cam_matrix, dist_coeffs)
-                        elif glasses_overlay is not None and anchors is not None:
-                            # 2D Image Overlay Fallback Path
-                            current_img = accessory_mgr.current_image if accessory_mgr else None
-                            glasses_overlay.apply(
-                                frame=frame,
-                                left_eye=anchors.left_eye_center,
-                                right_eye=anchors.right_eye_center,
-                                nose_bridge=anchors.nose_bridge,
-                                accessory_image=current_img,
-                            )
+                        if self.use_3d_mode:
+                            if renderer_3d.is_available and pose_res.is_valid:
+                                # 3D AR Model Rendering Path with distance-invariant scaling
+                                fitting_res = fitting_engine.compute_fitting(
+                                    pose=pose_res,
+                                    pixel_landmarks=pixel_coords,
+                                    frame_shape=(actual_h, actual_w),
+                                    focal_length=cam_matrix[0, 0],
+                                )
+                                renderer_3d.render(frame, fitting_res, cam_matrix, dist_coeffs)
+                        else:
+                            if glasses_overlay is not None and anchors is not None:
+                                # 2D Image Overlay Path
+                                current_img = accessory_mgr.current_image if accessory_mgr else None
+                                glasses_overlay.apply(
+                                    frame=frame,
+                                    left_eye=anchors.left_eye_center,
+                                    right_eye=anchors.right_eye_center,
+                                    nose_bridge=anchors.nose_bridge,
+                                    accessory_image=current_img,
+                                )
                     render_ms = (time.perf_counter() - t_rend) * 1000.0
 
                     # 6. Optional 3D Coordinate Axes Visualization
@@ -492,6 +517,7 @@ class MirrorFitApp:
                     pose=pose_res,
                     anchors=anchors,
                     accessory_name=active_2d_name,
+                    renderer_3d=renderer_3d,
                 )
 
                 # 10. Display Frame in Window
@@ -504,29 +530,39 @@ class MirrorFitApp:
                     break
                 elif key in (ord("t"), ord("T")):
                     self.use_3d_mode = not self.use_3d_mode
-                    mode_label = "3D AR Model" if self.use_3d_mode else "2D Overlay"
-                    print(f"[MirrorFit XR] Rendering mode switched to: {mode_label}")
-                    self.show_notification(f"Mode: {mode_label}")
+                    active_label = "3D AR Model" if self.use_3d_mode else f"2D ({accessory_mgr.current_item.name if accessory_mgr else 'Default'})"
+                    print(f"[MirrorFit XR] Rendering mode switched to: {active_label}")
+                    self.show_notification(f"Mode: {active_label}")
+                elif key in (ord("w"), ord("W")):
+                    if self.use_3d_mode:
+                        is_wf = renderer_3d.toggle_wireframe()
+                        wf_label = "Wireframe Debug (ON)" if is_wf else "Solid Shaded (OFF)"
+                        print(f"[MirrorFit XR] 3D Wireframe mode: {wf_label}")
+                        self.show_notification(f"3D Visual: {wf_label}")
+                    else:
+                        self.show_notification("Switch to 3D Mode ([T]) for Wireframe")
                 elif key in (ord("x"), ord("X")):
                     self.show_pose_axes = not self.show_pose_axes
                     print(f"[MirrorFit XR] 3D Pose Axes: {'ON' if self.show_pose_axes else 'OFF'}")
+                    self.show_notification(f"Axes: {'ON' if self.show_pose_axes else 'OFF'}")
                 elif key in (ord("b"), ord("B")):
                     self.show_segmentation = not self.show_segmentation
                     print(f"[MirrorFit XR] Face Segmentation Mask: {'ON' if self.show_segmentation else 'OFF'}")
                     self.show_notification(f"Segmentation: {'ON' if self.show_segmentation else 'OFF'}")
                 elif key in (ord("1"), ord("2"), ord("3"), ord("4")) and accessory_mgr:
-                    accessory_mgr.select_by_key(int(chr(key)))
-                    if self.use_3d_mode:
-                        self.use_3d_mode = False
-                        self.show_notification("Switched to 2D Style Mode")
+                    idx = int(chr(key))
+                    accessory_mgr.select_by_key(idx)
+                    self.use_3d_mode = False
+                    self.show_notification(f"2D Style: {accessory_mgr.current_item.name}")
+                    print(f"[MirrorFit XR] Selected 2D style [{idx}]: {accessory_mgr.current_item.name}")
                 elif key in (ord("n"), ord("N")) and accessory_mgr:
                     accessory_mgr.next_accessory()
-                    if self.use_3d_mode:
-                        self.use_3d_mode = False
+                    self.use_3d_mode = False
+                    self.show_notification(f"2D Style: {accessory_mgr.current_item.name}")
                 elif key in (ord("p"), ord("P")) and accessory_mgr:
                     accessory_mgr.prev_accessory()
-                    if self.use_3d_mode:
-                        self.use_3d_mode = False
+                    self.use_3d_mode = False
+                    self.show_notification(f"2D Style: {accessory_mgr.current_item.name}")
                 elif key in (ord("s"), ord("S")):
                     tag = "3d_model" if self.use_3d_mode else (accessory_mgr.current_item.name if accessory_mgr else "frame")
                     saved_path = screenshot_service.capture(frame, tag)

@@ -5,13 +5,13 @@
 * **Phase 1:** High-speed webcam capture, 478-point 3D facial landmark detection, and HUD telemetry.
 * **Phase 2:** Virtual glasses overlay with dynamic scaling, head tilt rotation, boundary clipping, and alpha compositing.
 * **Phase 3:** Anti-jitter temporal smoothing, multi-accessory 2D catalog, and timestamped screenshot service.
-* **Phase 4 (Current):** **3D Augmented Reality Prototype**:
-  * 6-DOF Head Pose Estimation (**Yaw**, **Pitch**, **Roll**) via `cv2.solvePnP` with 3D coordinate axes visualization.
-  * Real-time portrait and face segmentation inference using MediaPipe `selfie_segmenter.tflite`.
-  * Dedicated, decoupled **Intelligent Fitting Engine**.
-  * Projective **3D Accessory Renderer** loading Wavefront OBJ models with depth-sorted polygon shading.
-  * Runtime mode switching between **3D AR Model Mode** and **2D Overlay Mode**.
-  * Detailed performance monitoring (FPS, total frame latency, pose latency, and segmentation latency).
+* **Phase 4.1 (Stage 4.1 - Current):** **Enhanced 3D Augmented Reality & Realistic Fitting**:
+  * **Robust 2D/3D Mode Switching:** Reliable `[T]` toggle between 3D AR Model Mode and 2D Overlay Mode. Selecting 2D styles `1-4` or `N`/`P` switches to 2D without disabling 3D, and pressing `T` returns to 3D mode seamlessly.
+  * **Realistic Solid 3D Glasses Geometry:** 162 vertices, 180 faces featuring solid volumetric front rims, anatomical bridge saddle, tinted semi-transparent lenses, and volumetric temple arms extending back toward the ears ($Z = +95\text{ mm}$) with curved earpieces ($Z = +115\text{ mm}$).
+  * **Solid Shaded Surfaces Default with Wireframe Debug:** Renders shaded solid surfaces with directional Lambertian lighting and anti-aliased contours by default; press `[W]` to toggle wireframe debug mode.
+  * **Geometric Temple Arm Occlusion:** Dynamically evaluates head yaw and outward temple normals in camera space to cull far-side geometry behind the skull, preventing temple arms from drawing across the eyes or nose.
+  * **Proportional Anthropometric Scaling:** Dynamically scales glasses width according to detected eye and face dimensions, remaining stable when the user moves closer or farther.
+  * **60+ FPS Real-Time Optimization:** Precomputes face normals and centroids, vectorizes lighting and depth calculations, utilizes bounding-box ROI lens alpha blending, and downsamples segmentation input to native $256 \times 256$, boosting frame rates from ~10 FPS to 60+ FPS.
 
 ---
 
@@ -26,23 +26,25 @@ MirrorFit/
 │   │   ├── round_glasses.png
 │   │   └── sunglasses.png
 │   └── models_3d/              # 3D Accessory models
-│       └── glasses_3d.obj      # 3D Wavefront OBJ glasses mesh
+│       └── glasses_3d.obj      # Realistic 3D OBJ glasses mesh (162v / 180f)
 ├── models/
 │   ├── face_landmarker.task    # Google MediaPipe 478-point Face Landmarker (~3.76 MB)
 │   └── selfie_segmenter.tflite # Google MediaPipe Image Segmenter (~250 KB)
 ├── output/
 │   └── screenshots/            # Timestamped screenshot captures
+├── scratch/
+│   └── test_stage4_1.py        # Automated Stage 4.1 test and benchmark suite
 ├── src/
 │   ├── __init__.py             # Package exports
 │   ├── accessory_manager.py    # 2D Multi-accessory catalog & switcher
 │   ├── camera.py               # DirectShow camera acquisition & mirroring
-│   ├── face_segmentation.py    # MediaPipe face segmentation module
+│   ├── face_segmentation.py    # MediaPipe face segmentation module (optimized 256x256)
 │   ├── face_tracker.py         # 478-point landmark tracker & geometric anchors
-│   ├── fitting_engine.py       # Decoupled 3D transformation & fitting engine
+│   ├── fitting_engine.py       # Decoupled 3D transformation & anthropometric scaling
 │   ├── glasses_overlay.py      # 2D Scaling, rotation, & alpha compositing
 │   ├── head_pose.py            # 6-DOF solvePnP head pose estimator & axes
 │   ├── performance_monitor.py  # Latency tracking and smoothed FPS calculation
-│   ├── renderer_3d.py          # Projective 3D OBJ mesh renderer & shader
+│   ├── renderer_3d.py          # Vectorized 3D OBJ mesh renderer, shader, & culling
 │   ├── screenshot_service.py   # High-resolution screenshot capture service
 │   └── main.py                 # Application orchestrator, HUD, & hotkey controls
 ├── requirements.txt            # Compatible dependencies
@@ -118,12 +120,13 @@ python src/main.py --camera 0 --width 1280 --height 720
 | Key | Action |
 | :--- | :--- |
 | **T** | Toggle between **3D AR Model Mode** and **2D Overlay Mode** |
+| **W** | Toggle **3D Wireframe Debug Mode** on/off (solid surfaces by default) |
 | **X** | Toggle **3D Head Pose Coordinate Axes** on/off (Red=X, Green=Y, Blue=Z) |
 | **B** | Toggle **Face Segmentation Mask Overlay** on/off |
-| **1** | Select **Default Glasses** (switches to 2D mode) |
-| **2** | Select **Classic Glasses** (switches to 2D mode) |
-| **3** | Select **Round Glasses** (switches to 2D mode) |
-| **4** | Select **Sunglasses** (switches to 2D mode) |
+| **1** | Select **Default Glasses** (switches to 2D style mode) |
+| **2** | Select **Classic Glasses** (switches to 2D style mode) |
+| **3** | Select **Round Glasses** (switches to 2D style mode) |
+| **4** | Select **Sunglasses** (switches to 2D style mode) |
 | **N** / **P** | Cycle to Next / Previous 2D accessory |
 | **S** | Capture and save a timestamped screenshot to `output/screenshots/` |
 | **R** | Reset temporal tracking smoothing filters (both head pose and 2D overlay) |
