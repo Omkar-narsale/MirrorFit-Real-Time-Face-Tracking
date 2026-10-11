@@ -1,0 +1,6 @@
+# MirrorFit - Real-Time Virtual Try-On Studio (Phase 1 Dependencies)
+# Compatible with Python 3.10 to 3.13 on Windows
+
+opencv-python>=4.8.0,<5.1.0
+mediapipe>=0.10.14
+numpy>=1.24.0,<3.0.0
