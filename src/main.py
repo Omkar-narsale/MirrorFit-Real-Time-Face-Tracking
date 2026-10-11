@@ -1,6 +1,6 @@
 """Main application entry point for MirrorFit.
 
-Phase 1: Real-time face detection, 478-point landmark tracking, and try-on geometric anchors.
+Phase 2: Real-time face detection, 478-point landmark tracking, and virtual glasses overlay.
 """
 
 import argparse
@@ -19,10 +19,11 @@ import numpy as np
 
 from src.camera import Camera
 from src.face_tracker import FaceTracker, TryOnAnchors
+from src.glasses_overlay import GlassesOverlay
 
 
 class MirrorFitApp:
-    """Coordinates camera capture, face tracking, UI rendering, and user input."""
+    """Coordinates camera capture, face tracking, virtual glasses overlay, and user interface."""
 
     WINDOW_NAME = "MirrorFit | Virtual Try-On Studio"
 
@@ -32,6 +33,9 @@ class MirrorFitApp:
         width: int = 1280,
         height: int = 720,
         model_path: Optional[str] = None,
+        glasses_path: str = "assets/glasses/default_glasses.png",
+        scale_factor: float = 2.15,
+        vertical_offset: float = 0.05,
     ) -> None:
         """Initialize the application components.
 
@@ -40,16 +44,23 @@ class MirrorFitApp:
             width: Preferred frame width in pixels.
             height: Preferred frame height in pixels.
             model_path: Optional custom path to face_landmarker.task.
+            glasses_path: Path to transparent PNG glasses asset.
+            scale_factor: Glasses width scale factor relative to eye distance.
+            vertical_offset: Vertical offset ratio relative to glasses height.
         """
         self.camera_index = camera_index
         self.width = width
         self.height = height
         self.model_path = model_path
+        self.glasses_path = glasses_path
+        self.scale_factor = scale_factor
+        self.vertical_offset = vertical_offset
 
-        # UI toggle states
-        self.show_mesh = True
-        self.show_contours = True
-        self.show_anchors = True
+        # UI toggle states (Glasses active by default; mesh subtle/toggled via M)
+        self.show_glasses = True
+        self.show_mesh = False
+        self.show_contours = False
+        self.show_anchors = False
         self.show_hud = True
 
         # FPS calculation variables
@@ -64,7 +75,7 @@ class MirrorFitApp:
         fps: float,
         anchors: Optional[TryOnAnchors],
     ) -> None:
-        """Render a clean, modern computer vision HUD (Head-Up Display) on the frame.
+        """Render a clean, modern computer vision HUD on the frame.
 
         Args:
             frame: OpenCV image frame (modified in-place).
@@ -91,14 +102,14 @@ class MirrorFitApp:
         # Blend overlay with original frame (alpha = 0.7)
         cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
 
-        # Accent top line (Cyber cyan)
+        # Accent border lines
         cv2.line(frame, (0, header_height), (w, header_height), (60, 60, 75), 1)
         cv2.line(frame, (0, h - footer_height), (w, h - footer_height), (60, 60, 75), 1)
 
         # -------------------------------------------------------------
         # 2. Application Title
         # -------------------------------------------------------------
-        title_text = "MirrorFit | Virtual Try-On Studio"
+        title_text = "MirrorFit | Virtual Try-On Studio (Phase 2)"
         cv2.putText(
             frame,
             title_text,
@@ -183,12 +194,12 @@ class MirrorFitApp:
         # 5. Live Geometric Telemetry (If Face Detected)
         # -------------------------------------------------------------
         if is_detected and anchors is not None:
+            glasses_state = "ACTIVE" if self.show_glasses else "OFF"
             telemetry_text = (
-                f"Landmarks: 478 pts  |  Tilt: {anchors.face_tilt_deg:+.1f} deg  |  "
+                f"Glasses: {glasses_state}  |  Tilt: {anchors.face_tilt_deg:+.1f} deg  |  "
                 f"IPD: {anchors.interpupillary_distance_px:.0f}px  |  "
-                f"Frame Span: {anchors.glasses_width_px:.0f}px"
+                f"Span: {anchors.glasses_width_px:.0f}px"
             )
-            # Small pill banner below the header
             telemetry_y = header_height + 26
             (t_w, _), _ = cv2.getTextSize(telemetry_text, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)
             cv2.rectangle(
@@ -221,6 +232,7 @@ class MirrorFitApp:
         # -------------------------------------------------------------
         footer_text = (
             "Controls: [Q/ESC] Exit  |  "
+            f"[G] Glasses: {'ON' if self.show_glasses else 'OFF'}  |  "
             f"[M] Mesh: {'ON' if self.show_mesh else 'OFF'}  |  "
             f"[A] Anchors: {'ON' if self.show_anchors else 'OFF'}  |  "
             "[H] Toggle HUD"
@@ -254,12 +266,13 @@ class MirrorFitApp:
         return self.smoothed_fps
 
     def run(self) -> None:
-        """Run the main capture, tracking, rendering, and event loop."""
-        print("=" * 65)
-        print("  MirrorFit | Real-Time Virtual Try-On Studio (Phase 1)")
-        print("=" * 65)
-        print("Initializing webcam and MediaPipe Face Landmarker...")
+        """Run the main capture, tracking, overlay, rendering, and event loop."""
+        print("=" * 68)
+        print("  MirrorFit | Real-Time Virtual Try-On Studio (Phase 2)")
+        print("=" * 68)
+        print("Initializing webcam, MediaPipe Face Landmarker, and Glasses Overlay...")
 
+        # 1. Initialize Face Tracker
         try:
             face_tracker = FaceTracker(model_path=self.model_path)
         except FileNotFoundError as err:
@@ -269,6 +282,20 @@ class MirrorFitApp:
             print(f"[Error] Failed to initialize Face Tracker: {exc}")
             sys.exit(1)
 
+        # 2. Initialize Glasses Overlay Engine
+        try:
+            glasses_overlay = GlassesOverlay(
+                asset_path=self.glasses_path,
+                scale_factor=self.scale_factor,
+                vertical_offset_ratio=self.vertical_offset,
+            )
+            print(f"[MirrorFit] Loaded glasses asset successfully from '{self.glasses_path}'.")
+        except (FileNotFoundError, ValueError) as err:
+            print(f"\n[Asset Error] {err}")
+            face_tracker.close()
+            sys.exit(1)
+
+        # 3. Initialize Camera
         try:
             camera = Camera(
                 device_index=self.camera_index,
@@ -284,7 +311,7 @@ class MirrorFitApp:
 
         actual_w, actual_h = camera.get_resolution()
         print(f"[MirrorFit] Camera started successfully at {actual_w}x{actual_h} resolution.")
-        print("[MirrorFit] Ready! Focus the webcam window and press 'Q' or 'ESC' to exit.\n")
+        print("[MirrorFit] Ready! Press [G] to toggle glasses, [M] for mesh, and [Q]/[ESC] to exit.\n")
 
         cv2.namedWindow(self.WINDOW_NAME, cv2.WINDOW_AUTOSIZE)
 
@@ -301,21 +328,34 @@ class MirrorFitApp:
                     frame
                 )
 
-                # 3. Draw facial landmarks on the live frame
-                if is_detected:
-                    face_tracker.draw_landmarks(
-                        frame=frame,
-                        raw_landmarks=raw_landmarks,
-                        tryon_anchors=anchors,
-                        show_mesh=self.show_mesh,
-                        show_contours=self.show_contours,
-                        show_anchors=self.show_anchors,
-                    )
+                if is_detected and anchors is not None:
+                    # 3. Apply Virtual Glasses Overlay
+                    if self.show_glasses:
+                        glasses_overlay.apply(
+                            frame=frame,
+                            left_eye=anchors.left_eye_center,
+                            right_eye=anchors.right_eye_center,
+                            nose_bridge=anchors.nose_bridge,
+                        )
 
-                # 4. Calculate smoothed FPS
+                    # 4. Optional landmark visualization overlay
+                    if self.show_mesh or self.show_contours or self.show_anchors:
+                        face_tracker.draw_landmarks(
+                            frame=frame,
+                            raw_landmarks=raw_landmarks,
+                            tryon_anchors=anchors,
+                            show_mesh=self.show_mesh,
+                            show_contours=self.show_contours,
+                            show_anchors=self.show_anchors,
+                        )
+                else:
+                    # When no face is detected, reset temporal filter so glasses don't lag on return
+                    glasses_overlay.reset_filter()
+
+                # 5. Calculate smoothed FPS
                 current_fps = self.calculate_fps()
 
-                # 5. Render HUD Overlay
+                # 6. Render HUD Overlay
                 self.draw_hud(
                     frame=frame,
                     is_detected=is_detected,
@@ -323,16 +363,20 @@ class MirrorFitApp:
                     anchors=anchors,
                 )
 
-                # 6. Display frame in window
+                # 7. Display frame in window
                 cv2.imshow(self.WINDOW_NAME, frame)
 
-                # 7. Handle keyboard input (1 ms wait)
+                # 8. Handle keyboard input (1 ms wait)
                 key = cv2.waitKey(1) & 0xFF
                 if key in (ord("q"), ord("Q"), 27):  # 27 is ESC key
                     print("\n[MirrorFit] Exit requested by user. Shutting down...")
                     break
+                elif key in (ord("g"), ord("G")):
+                    self.show_glasses = not self.show_glasses
+                    print(f"[MirrorFit] Glasses overlay: {'ON' if self.show_glasses else 'OFF'}")
                 elif key in (ord("m"), ord("M")):
                     self.show_mesh = not self.show_mesh
+                    self.show_contours = self.show_mesh
                     print(f"[MirrorFit] Mesh visualization: {'ON' if self.show_mesh else 'OFF'}")
                 elif key in (ord("a"), ord("A")):
                     self.show_anchors = not self.show_anchors
@@ -345,7 +389,7 @@ class MirrorFitApp:
             print("\n[MirrorFit] Interrupted by terminal (Ctrl+C). Exiting...")
 
         finally:
-            # 8. Clean up all resources
+            # Clean up all resources
             print("[MirrorFit] Releasing camera and cleaning up OpenCV windows...")
             camera.release()
             face_tracker.close()
@@ -356,7 +400,7 @@ class MirrorFitApp:
 def main() -> None:
     """Parse command line arguments and execute the application."""
     parser = argparse.ArgumentParser(
-        description="MirrorFit Phase 1: Real-Time Face Detection and Tracking"
+        description="MirrorFit Phase 2: Real-Time Virtual Glasses Overlay"
     )
     parser.add_argument(
         "--camera",
@@ -382,6 +426,24 @@ def main() -> None:
         default=None,
         help="Custom path to face_landmarker.task model file",
     )
+    parser.add_argument(
+        "--glasses",
+        type=str,
+        default="assets/glasses/default_glasses.png",
+        help="Path to transparent PNG glasses asset (default: assets/glasses/default_glasses.png)",
+    )
+    parser.add_argument(
+        "--scale",
+        type=float,
+        default=2.15,
+        help="Scale multiplier for glasses width based on eye distance (default: 2.15)",
+    )
+    parser.add_argument(
+        "--offset",
+        type=float,
+        default=0.05,
+        help="Vertical offset ratio for glasses positioning (default: 0.05)",
+    )
 
     args = parser.parse_args()
     app = MirrorFitApp(
@@ -389,6 +451,9 @@ def main() -> None:
         width=args.width,
         height=args.height,
         model_path=args.model,
+        glasses_path=args.glasses,
+        scale_factor=args.scale,
+        vertical_offset=args.offset,
     )
     app.run()
 

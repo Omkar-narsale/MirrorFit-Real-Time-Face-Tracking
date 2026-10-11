@@ -1,8 +1,9 @@
-# MirrorFit | Real-Time Virtual Try-On Studio (Phase 1)
+# MirrorFit | Real-Time Virtual Try-On Studio (Phase 1 & Phase 2)
 
-MirrorFit is a real-time computer vision application that tracks facial landmarks using **Python**, **OpenCV**, **MediaPipe**, and **NumPy**.
+MirrorFit is a real-time computer vision application that tracks facial landmarks and overlays virtual accessories using **Python**, **OpenCV**, **MediaPipe**, and **NumPy**.
 
-Phase 1 establishes the foundational computer vision pipeline: high-speed webcam frame capture, 478-point 3D facial landmark detection, geometric anchor extraction for virtual glasses positioning, and a clean HUD interface.
+* **Phase 1:** High-speed webcam capture, 478-point 3D facial landmark detection, and HUD telemetry.
+* **Phase 2:** Real-time **Virtual Glasses Overlay** with proportional scaling, head tilt rotation, boundary clipping, and vectorized alpha compositing.
 
 ---
 
@@ -11,17 +12,19 @@ Phase 1 establishes the foundational computer vision pipeline: high-speed webcam
 ```
 MirrorFit/
 ├── assets/
-│   └── glasses/             # Reserved for Phase 2 transparent glasses PNGs
+│   └── glasses/
+│       └── default_glasses.png # 4-channel RGBA transparent glasses graphic
 ├── models/
-│   └── face_landmarker.task # Google MediaPipe Face Landmarker model bundle
+│   └── face_landmarker.task    # Google MediaPipe Face Landmarker model bundle
 ├── src/
-│   ├── __init__.py          # Package initialization
-│   ├── camera.py            # OpenCV camera capture & mirroring manager
-│   ├── face_tracker.py      # MediaPipe landmark detector & try-on geometry
-│   └── main.py              # Application loop, HUD overlay, & keyboard controls
-├── requirements.txt         # Compatible Python dependencies
-├── README.md                # Comprehensive project documentation
-└── .gitignore               # Ignored environments, cache, & artifacts
+│   ├── __init__.py             # Package exports (Camera, FaceTracker, GlassesOverlay)
+│   ├── camera.py               # Camera capture, DirectShow backend, & mirroring
+│   ├── face_tracker.py         # 478-point landmark tracker & geometric anchors
+│   ├── glasses_overlay.py      # Scaling, unclipped rotation, & alpha blending
+│   └── main.py                 # Application loop, HUD overlay, & keyboard controls
+├── requirements.txt            # Compatible Python dependencies
+├── README.md                   # Full documentation, math theory, & testing plan
+└── .gitignore                  # Ignored environments, cache, & artifacts
 ```
 
 ---
@@ -31,7 +34,6 @@ MirrorFit/
 Follow these step-by-step commands in **PowerShell** or **Command Prompt** inside Visual Studio Code.
 
 ### Step 1: Open Project in VS Code
-Open your terminal and navigate to the project directory:
 ```powershell
 cd c:\Users\Omkar\Desktop\MirrorFit
 code .
@@ -48,44 +50,41 @@ Activate the virtual environment:
   ```powershell
   .\venv\Scripts\Activate.ps1
   ```
-  *(If you encounter an execution policy error in PowerShell, run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` and then run the activation script again).*
+  *(If execution policy errors occur, run: `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` and rerun the activate command).*
 * In **Command Prompt (CMD)**:
   ```cmd
   .\venv\Scripts\activate.bat
   ```
 
 ### Step 3: Install Dependencies
-Upgrade pip and install the required dependencies:
 ```powershell
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### Step 4: Verify MediaPipe Model Asset
-The modern MediaPipe Tasks API requires Google's official `face_landmarker.task` model bundle.
-The model is stored inside `models/face_landmarker.task`. If you need to download it manually:
-```powershell
-# Using PowerShell
-Invoke-WebRequest -Uri "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task" -OutFile "models\face_landmarker.task"
-```
-Or using `curl`:
-```bash
-curl -o models/face_landmarker.task https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
-```
+### Step 4: Verify Assets
+* **MediaPipe Model:** Ensure `models/face_landmarker.task` is present (~3.76 MB).
+* **Glasses Graphic:** Ensure `assets/glasses/default_glasses.png` is present (4-channel RGBA with alpha transparency).
 
 ### Step 5: Run the Application
-Launch MirrorFit Phase 1:
+Launch MirrorFit Phase 2:
 ```powershell
 python src/main.py
 ```
 
-Optional CLI flags:
+#### Optional CLI Customization Flags:
 ```powershell
-# Specify camera index (default: 0)
-python src/main.py --camera 0
+# Adjust glasses scale multiplier (default: 2.15)
+python src/main.py --scale 2.25
 
-# Specify custom resolution (default: 1280x720)
-python src/main.py --width 1920 --height 1080
+# Adjust vertical offset ratio relative to glasses height (default: 0.05)
+python src/main.py --offset 0.08
+
+# Specify custom glasses PNG asset
+python src/main.py --glasses assets/glasses/default_glasses.png
+
+# Specify camera index and resolution
+python src/main.py --camera 0 --width 1280 --height 720
 ```
 
 ---
@@ -94,177 +93,119 @@ python src/main.py --width 1920 --height 1080
 
 | Key | Action |
 | :--- | :--- |
-| **Q** or **ESC** | Safely exit application and release camera |
-| **M** | Toggle fine facial mesh wireframe on/off |
-| **A** | Toggle virtual try-on anchor markers (eye line, pupils, nose bridge) |
+| **G** | Toggle Virtual Glasses Overlay on/off |
+| **M** | Toggle facial mesh wireframe on/off |
+| **A** | Toggle try-on geometric anchor points on/off |
 | **H** | Toggle HUD overlay (header, metrics, and badges) |
+| **Q** or **ESC** | Safely exit application and release camera |
 
 ---
 
-## 4. MediaPipe Model Requirements
+## 4. Code Architecture & Modular Design
 
-* **Model Name:** Google MediaPipe Face Landmarker (Float16 task bundle)
-* **Official URL:** `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`
-* **Local Destination:** `models/face_landmarker.task`
-* **File Verification:** `src/face_tracker.py` verifies the model file exists and is non-empty before instantiating the detector. If missing, it halts with an explicit error detailing the download link and placement steps.
+### `src/camera.py` — Hardware Video Capture
+* **DirectShow Acceleration:** Uses `cv2.CAP_DSHOW` on Windows to eliminate multi-second initialization lag.
+* **Horizontal Mirroring:** Automatically executes `cv2.flip(frame, 1)`. In a virtual try-on mirror, moving your head right must move right on-screen.
+* **Safe Resource Lifecycle:** Implements context management and `release()` to guarantee hardware handles are freed under all exit paths.
 
----
+### `src/face_tracker.py` — Face Mesh & Coordinate Engine
+* **478-Point Tracking:** Leverages Google MediaPipe `FaceLandmarker` with XNNPACK CPU acceleration.
+* **Coordinate Conversion:** Transforms normalized landmarks $(x, y \in [0.0, 1.0])$ into image pixel coordinates $(px_x, px_y)$.
+* **Try-On Anchors:**
+  * Left & Right Eye / Iris centers (`landmarks 468 & 473`).
+  * Nose saddle point / bridge (`landmark 168`).
+  * Temple width span (`landmarks 234 & 454`).
 
-## 5. Code Architecture (File-by-File Explanation)
+### `src/glasses_overlay.py` — Augmented Reality Overlay Engine
+* **Asset Validation:** Ensures the image is a valid 4-channel BGRA PNG with a non-trivial alpha channel.
+* **Dynamic Proportional Scaling:** Calculates glasses width from Interpupillary Distance (IPD) multiplied by `scale_factor` (default `2.15`).
+* **Unclipped Bounding-Box Rotation:** Computes new expanded bounding dimensions $(W_{\text{new}}, H_{\text{new}})$ during affine rotation so glasses temples are never truncated.
+* **Viewport Clipping:** Slices intersecting regions between the rotated glasses and the video viewport $[0, W] \times [0, H]$, preventing crashes when users lean near edges.
+* **Vectorized Alpha Blending:** Uses NumPy broadcasting to blend RGB channels weighted by normalized alpha channel values.
+* **Jitter Reduction:** Applies Exponential Moving Average (EMA) filtering to position, scale, and angle.
 
-### `src/camera.py` — Hardware Abstraction Layer
-* **`Camera` class:** Encapsulates `cv2.VideoCapture`.
-* **DirectShow Initialization:** On Windows, `cv2.CAP_DSHOW` opens webcams immediately without multi-second DirectShow/MSMF negotiation delays. If unsupported, it gracefully falls back to `cv2.CAP_ANY`.
-* **Mirroring:** Uses `cv2.flip(frame, 1)` to flip horizontally. In a virtual try-on mirror, moving your head to the right must move right on-screen.
-* **Failure Detection:** `read_frame()` returns a tuple `(success, frame)`. If frames drop or the camera disconnects, the pipeline detects it without crashing.
-* **Resource Release:** Implements `release()` and the context manager protocol (`__enter__` and `__exit__`) to guarantee hardware handles are freed even if an exception occurs.
-
-### `src/face_tracker.py` — Computer Vision & Geometry Engine
-* **`FaceTracker` class:** Manages `mediapipe.tasks.python.vision.FaceLandmarker`.
-* **Preprocessing:** Converts OpenCV frames from BGR format to RGB format (`cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)`), wraps them into `mp.Image`, and feeds them to the detector.
-* **Coordinate Mapping:** Transforms normalized landmarks $(x, y \in [0.0, 1.0])$ into image pixel coordinates:
-  $$\text{pixel\_x} = \text{int}(x \times \text{width}), \quad \text{pixel\_y} = \text{int}(y \times \text{height})$$
-* **Anchor Extraction (`compute_tryon_anchors`):**
-  * Computes **Interpupillary Distance (IPD)** in pixels via Euclidean distance between iris centers ($d = \sqrt{\Delta x^2 + \Delta y^2}$).
-  * Computes **Face Roll / Tilt Angle** in degrees ($\theta = \arctan2(\Delta y, \Delta x) \times \frac{180}{\pi}$) between eye centers.
-  * Identifies the **Nose Saddle Point** (landmark 168) where glasses rests.
-  * Identifies the **Temple Hinges** (landmarks 234 and 454) for glasses frame width.
-* **Visualization:** Draws the fine 478-landmark tessellation, facial contours (eyes, lips, brows, oval), irises, and high-visibility try-on anchor markers.
-
-### `src/main.py` — Orchestration & User Interface
-* **`MirrorFitApp` class:** Orchestrates the capture $\rightarrow$ tracking $\rightarrow$ rendering loop.
-* **HUD Overlay:** Renders a semi-transparent HUD header and footer using `cv2.addWeighted`, title text, dynamic face status badges, real-time FPS, and live geometric telemetry.
-* **FPS Calculation:** Calculates instantaneous FPS via high-resolution `time.perf_counter()` and applies an Exponential Moving Average (EMA) to keep the display readable and jitter-free.
-* **Clean Shutdown:** Catches `Q`, `ESC`, and `SIGINT` (Ctrl+C), ensuring OpenCV windows close and camera resources are released.
+### `src/main.py` — Application Orchestrator
+* **Inference & Render Pipeline:** Captures mirrored frames $\rightarrow$ runs face tracking $\rightarrow$ renders glasses overlay $\rightarrow$ updates HUD $\rightarrow$ handles keyboard input.
+* **No-Face Handling:** When a face is absent, glasses are immediately hidden and the filter is reset so no residual position lag occurs when a face re-enters.
 
 ---
 
-## 6. Learning Objectives (Beginner-Friendly Computer Vision)
+## 5. Mathematical & Computer Vision Concepts Explained
 
-### 1. How OpenCV Captures Webcam Frames
-OpenCV uses `cv2.VideoCapture` to communicate with the OS camera driver (DirectShow or Media Foundation on Windows). The camera hardware continuously digitizes light sensor data into raw frames. When you call `cap.read()`, OpenCV grabs the latest frame buffer and decodes it into a NumPy array of shape `(height, width, 3)`.
+### 1. Determining Placement Center
+To place the glasses naturally across the nose saddle rather than floating artificially:
+$$X_{\text{mid}} = \frac{X_{\text{left\_eye}} + X_{\text{right\_eye}}}{2}, \quad Y_{\text{mid}} = \frac{Y_{\text{left\_eye}} + Y_{\text{right\_eye}}}{2}$$
+We blend the eye midpoint with the physical nose bridge (landmark 168) and add a proportional vertical offset:
+$$C_X = 0.7 \times X_{\text{mid}} + 0.3 \times X_{\text{bridge}}$$
+$$C_Y = (0.7 \times Y_{\text{mid}} + 0.3 \times Y_{\text{bridge}}) + (H_{\text{glasses}} \times \text{offset\_ratio})$$
 
-### 2. What MediaPipe Does
-MediaPipe is Google's high-performance machine learning framework for perceptual computing. For face tracking, it runs a two-step deep learning pipeline:
-1. **Face Detector:** Detects the bounding box of the face in the image.
-2. **Face Landmarker:** Crops and normalizes the face region, then runs a lightweight convolutional neural network that estimates 478 3D landmark points and surface blendshapes in just 1–3 milliseconds on CPU.
+### 2. Proportional Scaling Based on Eye Distance
+As a user moves closer or farther from the camera, the face size changes. We compute the Interpupillary Distance (IPD) using Euclidean distance:
+$$\text{IPD} = \sqrt{(X_2 - X_1)^2 + (Y_2 - Y_1)^2}$$
+$$\text{Width}_{\text{glasses}} = \text{IPD} \times \text{scale\_factor}$$
+$$\text{Height}_{\text{glasses}} = \text{Width}_{\text{glasses}} \times \left(\frac{H_{\text{orig}}}{W_{\text{orig}}}\right)$$
+Because human temple width is approximately $2.1\times$ to $2.2\times$ the interpupillary distance, this yields anatomically accurate sizing across all camera distances.
 
-### 3. What Facial Landmarks Represent
-Facial landmarks are specific anatomical points on the human face:
-* Point 4 is the tip of the nose.
-* Point 168 is the glabella/bridge of the nose between the eyes.
-* Points 33 and 263 are the outer corners of the eyes.
-* Points 468 and 473 are the exact centers of the left and right irises.
-Together, these 478 points define a 3D surface mesh topology covering the face oval, lips, eyes, eyebrows, and irises.
+### 3. Eye Line Rotation & OpenCV Sign Convention
+Let $(X_1, Y_1)$ be the viewer's left eye and $(X_2, Y_2)$ be the viewer's right eye on screen ($X_1 < X_2$). The tilt angle of the eye line relative to horizontal is:
+$$\theta = \arctan2(Y_2 - Y_1, X_2 - X_1) \times \frac{180}{\pi}$$
+* In screen coordinates, $+Y$ points downward. If the user tilts their head clockwise, the right eye drops lower ($Y_2 > Y_1$), producing $\theta > 0$.
+* OpenCV's `cv2.getRotationMatrix2D` rotates **counter-clockwise** for positive angles.
+* Therefore, to rotate the horizontal glasses graphic clockwise to match the head tilt, the rotation angle passed to OpenCV is:
+$$\text{Angle}_{\text{OpenCV}} = -\theta$$
 
-### 4. How Normalized Coordinates Map to Pixel Coordinates
-Neural networks perform best when input coordinates are normalized between $0.0$ and $1.0$, regardless of camera resolution.
-* If a camera feeds an image of size $1280 \times 720$, and a landmark has normalized coordinates $x = 0.5$ and $y = 0.4$:
-  $$\text{pixel\_x} = 0.5 \times 1280 = 640\text{ px}$$
-  $$\text{pixel\_y} = 0.4 \times 720 = 288\text{ px}$$
-This resolution-independent representation allows the same model to work across webcams of any resolution.
+### 4. Unclipped Affine Rotation (Expanded Bounding Box)
+Rotating an image of width $w$ and height $h$ by angle $\phi$ inside its original boundary cuts off the corners. To preserve the entire frame and temples:
+$$W_{\text{new}} = \lceil |h \sin(\phi)| + |w \cos(\phi)| \rceil$$
+$$H_{\text{new}} = \lceil |h \cos(\phi)| + |w \sin(\phi)| \rceil$$
+The transformation matrix translation terms are shifted to the expanded center:
+$$M[0, 2] += \frac{W_{\text{new}}}{2} - \frac{w}{2}, \quad M[1, 2] += \frac{H_{\text{new}}}{2} - \frac{h}{2}$$
+and warped using `cv2.warpAffine(..., (W_{\text{new}}, H_{\text{new}}), borderValue=(0, 0, 0, 0))`.
 
-### 5. How NumPy Helps with Image Processing
-In OpenCV, every image frame is represented as a NumPy array of unsigned 8-bit integers (`np.uint8`) with shape `(height, width, channels)`. NumPy enables:
-* High-speed vectorized math (e.g. Euclidean distances, trigonometric rotations, matrix scaling).
-* Instant slicing and masking without slow Python `for` loops.
-* Efficient color space transformations and memory sharing.
+### 5. Alpha Compositing (Transparency Blending)
+For overlapping pixels between the 4-channel BGRA glasses and the 3-channel BGR webcam frame:
+$$\alpha = \frac{\text{Overlay}_{\text{alpha}}}{255.0} \in [0.0, 1.0]$$
+$$\text{Pixel}_{\text{out}} = \alpha \times \text{Overlay}_{\text{BGR}} + (1.0 - \alpha) \times \text{Frame}_{\text{BGR}}$$
+Transparent areas $(\alpha = 0)$ leave the webcam frame completely untouched, semi-transparent areas $(\alpha \approx 0.4)$ show tinted sunglasses lenses with specular reflection, and opaque areas $(\alpha = 1.0)$ render the solid glasses frames.
 
-### 6. How FPS is Calculated
-Frames Per Second (FPS) measures performance. We measure the elapsed time $\Delta t$ between consecutive frames using `time.perf_counter()`:
-$$\text{Instantaneous FPS} = \frac{1}{\Delta t}$$
-To prevent the number on screen from flickering wildly, we apply an Exponential Moving Average (EMA):
-$$\text{FPS}_{\text{smoothed}} = \alpha \times \text{FPS}_{\text{instant}} + (1 - \alpha) \times \text{FPS}_{\text{prev}}$$
-where $\alpha = 0.1$.
+### 6. Viewport Boundary Clipping
+When the user moves close to the camera borders, the glasses bounding box may exceed $[0, W] \times [0, H]$. We clip the target coordinates:
+$$X_{1,\text{clip}} = \max(0, X_1), \quad Y_{1,\text{clip}} = \max(0, Y_1)$$
+$$X_{2,\text{clip}} = \min(W_{\text{frame}}, X_2), \quad Y_{2,\text{clip}} = \min(H_{\text{frame}}, Y_2)$$
+and slice the exact corresponding sub-region of the glasses graphic. If $X_{1,\text{clip}} \ge X_{2,\text{clip}}$ or $Y_{1,\text{clip}} \ge Y_{2,\text{clip}}$, rendering is cleanly skipped without memory access errors.
 
-### 7. How the Application Handles Missing Faces
-When a user steps away or covers the camera, MediaPipe returns an empty landmark list `[]`. The tracker checks this condition and returns `is_detected = False`. The application immediately updates the HUD badge to `"NO FACE DETECTED"`, skips landmark rendering, and waits for a face to re-enter without crashing or throwing null-reference exceptions.
+### 7. Temporal Smoothing (Jitter Suppression)
+Micro-movements and sensor noise cause raw landmark coordinates to oscillate by 1–2 pixels between frames. We apply an Exponential Moving Average (EMA) filter:
+$$S_t = \beta \cdot M_t + (1 - \beta) \cdot S_{t-1}$$
+where $\beta = 0.35$. This eliminates jitter while maintaining responsive tracking during rapid head motion.
 
-### 8. How Webcam Resources Are Released
-Webcam devices are shared hardware resources locked by the operating system. If an application exits abruptly without releasing the camera, the OS lock remains active, preventing other apps from using the camera. MirrorFit uses a `finally:` block and `camera.release()`, ensuring `cv2.VideoCapture` is closed and hardware locks are freed under all exit conditions (Q key, ESC key, window close, or Ctrl+C).
+---
 
-### 9. How Coordinates Will Position Glasses in Phase 2
-In Phase 2, virtual glasses (transparent PNGs) will be positioned using the anchors calculated in Phase 1:
-1. **Scale:** The width of the glasses is computed from the temple-to-temple span (`glasses_width_px`) or scaled Interpupillary Distance (`IPD * 2.2`).
-2. **Anchor Position:** The center bridge of the glasses frame is translated to the nose bridge anchor (`landmark 168`).
-3. **Rotation:** The glasses image is rotated around its center using OpenCV's affine transform (`cv2.getRotationMatrix2D`) matching the head roll angle (`face_tilt_deg`).
-4. **Alpha Blending:** The 4-channel BGRA glasses image is seamlessly overlaid using pixel-wise alpha compositing.
+## 6. Manual Testing Plan (Tests A through J)
+
+| Test | Objective & Action | Expected Result | What to Check If Failed |
+| :--- | :--- | :--- | :--- |
+| **Test A** | Start app via `python src/main.py`. | App launches immediately without errors; logs indicate glasses asset loaded. | Check `assets/glasses/default_glasses.png` exists and is a 4-channel PNG. |
+| **Test B** | Position face in front of webcam. | Glasses appear centered directly over both eyes and resting on the nose bridge. | Check `--scale` and `--offset` flags or press `G` to ensure glasses are toggled ON. |
+| **Test C** | Step closer and farther from the webcam. | Glasses scale up smoothly when moving closer and scale down when moving farther away. | Ensure `eye_distance * scale_factor` is calculating properly in `compute_geometry`. |
+| **Test D** | Move face left and right across the frame. | Glasses follow the face seamlessly without falling behind or detaching. | Verify webcam mirroring is handled consistently before landmark detection. |
+| **Test E** | Tilt head to the left and to the right. | Glasses rotate smoothly to match the eye line tilt in both directions. | Verify the rotation sign (`-angle_deg`) is applied in `compute_geometry`. |
+| **Test F** | Move head towards the extreme edges of the camera frame. | Glasses clip cleanly against frame borders without crashes or index errors. | Verify `x1_clip` and `y1_clip` clamping in `blend_overlay`. |
+| **Test G** | Step completely out of camera view. | Glasses disappear immediately; status badge turns amber/red (`NO FACE DETECTED`). | Verify `is_detected` check in `main.py` hides glasses when no face is detected. |
+| **Test H** | Re-enter camera view. | Glasses reappear instantly in the correct position without lag or jumping. | Verify `reset_filter()` is called when face tracking is lost. |
+| **Test I** | Inspect transparent lens areas and background. | Webcam background is visible around the frames and through tinted lens areas. | Verify PNG alpha channel is decoded via `cv2.IMREAD_UNCHANGED`. |
+| **Test J** | Press **Q** or **ESC**. | Window closes immediately, camera is released, and terminal exits cleanly. | Verify `finally:` block in `main.py` calls `camera.release()`. |
 
 ---
 
 ## 7. Troubleshooting Guide
 
-### 1. Webcam Not Opening
-* **Symptom:** `[Camera Error] Failed to open webcam (device index 0)`.
-* **Fix:**
-  1. Verify the webcam is connected and the lens cover is open.
-  2. If using an external USB camera or multiple cameras, pass `--camera 1` or `--camera 2`.
-  3. Close other applications (Zoom, Microsoft Teams, Skype, Windows Camera app) that might have locked the webcam.
-
-### 2. Windows Camera Permission Issues
-* **Symptom:** Webcam opens but returns black frames or fails immediately.
-* **Fix:**
-  1. Open Windows **Settings** $\rightarrow$ **Privacy & Security** $\rightarrow$ **Camera**.
-  2. Ensure **"Camera access"** is turned **On**.
-  3. Ensure **"Let desktop apps access your camera"** is turned **On**.
-
-### 3. MediaPipe Installation or Import Errors
-* **Symptom:** `ModuleNotFoundError: No module named 'mediapipe'`.
-* **Fix:**
-  1. Ensure your virtual environment is activated (`(venv)` appears in terminal prompt).
-  2. Run `pip install -r requirements.txt`.
-  3. Note: Python 3.10 through 3.13 are supported.
-
-### 4. Missing Model Asset (`face_landmarker.task`)
-* **Symptom:** `[MirrorFit ERROR] MediaPipe Model Asset Missing!`.
-* **Fix:**
-  Download the model using the command in Step 4:
-  ```powershell
-  Invoke-WebRequest -Uri "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task" -OutFile "models\face_landmarker.task"
-  ```
-
-### 5. Black or Frozen Webcam Output
-* **Symptom:** Window appears with title but image is pitch black.
-* **Fix:**
-  * Try specifying the resolution explicitly: `python src/main.py --width 640 --height 480`.
-  * Ensure your room has adequate lighting.
-
-### 6. Low FPS (Laggy Video)
-* **Symptom:** FPS is under 15 FPS.
-* **Fix:**
-  * Press **M** to disable the full dense mesh wireframe (rendering hundreds of lines every frame adds drawing overhead).
-  * Reduce resolution to standard 720p or 480p: `python src/main.py --width 640 --height 480`.
-
----
-
-## 8. Acceptance Criteria Checklist (Phase 1)
-
-- [x] Webcam opens successfully via OpenCV.
-- [x] Live video feed appears in high-resolution window.
-- [x] Video feed is horizontally mirrored for natural user interaction.
-- [x] MediaPipe Face Landmarker tracks 478 3D landmarks in real time.
-- [x] Normalized coordinates map accurately to image pixel space.
-- [x] Eye regions, nose bridge, temple hinges, and contours are identified.
-- [x] Interpupillary distance (IPD) and face tilt angle are computed.
-- [x] Dynamic face status (`FACE DETECTED` vs `NO FACE DETECTED`) updates cleanly.
-- [x] Real-time smoothed FPS counter is visible on the HUD.
-- [x] Pressing `Q` or `ESC` cleanly terminates the app and releases all resources.
-- [x] Windows virtual environment and VS Code compatibility verified.
-
----
-
-## 9. Future Development Roadmap
-
-* **Phase 2: Virtual Glasses Overlay**
-  * Load transparent PNG glasses models from `assets/glasses/`.
-  * Compute affine rotation matrix matching `face_tilt_deg`.
-  * Scale frame width to match interpupillary and temple span.
-  * Alpha-composite glasses onto nose bridge (`landmark 168`).
-* **Phase 3: Multiple Accessories & Interactive Catalog**
-  * Switch between sunglasses, reading glasses, and hats using keyboard keys (1–5) or on-screen buttons.
-  * Real-time color customization (lens tint, frame finish).
-* **Phase 4: 3D Head Pose & Perspective Warping**
-  * Use solvePnP with canonical 3D facial points to calculate yaw, pitch, and roll.
-  * Apply perspective warping or 3D rendering for glasses arms when turning head sideways.
-* **Phase 5: Advanced Computer Vision Experiments**
-  * Try-on lighting simulation, lens reflection rendering, and segmentation using PyTorch models.
+| Symptom | Probable Cause | Recommended Resolution |
+| :--- | :--- | :--- |
+| **Glasses too high or too low** | Facial geometry differences | Run with custom vertical offset: `python src/main.py --offset 0.08` (lower) or `--offset 0.0` (higher). |
+| **Glasses too large or too small** | Proportions relative to camera FOV | Run with custom scale factor: `python src/main.py --scale 2.0` (smaller) or `--scale 2.3` (larger). |
+| **Glasses rotate in reverse** | Inverted trigonometric angle sign | Ensure `opencv_rot_angle = -angle_deg` is used in `src/glasses_overlay.py`. |
+| **Opaque black/white box around glasses** | Image saved without alpha channel | Ensure image is saved with 4 channels (BGRA). Run the validation in `GlassesOverlay._load_glasses_asset`. |
+| **Temples clipped during head tilt** | Standard rotation cuts off bounding box | Verify `transform_glasses` computes `new_w` and `new_h` from the rotation matrix bounding expansion. |
+| **Glasses jittering during slight movement** | Landmark detection noise | Adjust `smoothing_factor` (e.g. `0.25` for smoother, `0.5` for faster reaction). |
+| **Low FPS (< 20 FPS)** | Dense wireframe mesh rendering overhead | Press **M** to toggle off the 478-point mesh wireframe. |
