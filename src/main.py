@@ -5,6 +5,7 @@ anti-jitter head tracking, screenshot capture, and advanced HUD interface.
 """
 
 import argparse
+import os
 from pathlib import Path
 import sys
 import time
