@@ -50,5 +50,6 @@ desktop.ini
 
 # Temporary output and screenshots
 scratch/
+output/screenshots/*.png
 test_*.png
 test_*.jpg

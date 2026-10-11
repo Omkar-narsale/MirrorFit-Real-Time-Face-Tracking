@@ -301,12 +301,24 @@ class GlassesOverlay:
         frame[y1_clip:y2_clip, x1_clip:x2_clip] = blended
         return frame
 
+    def set_accessory_image(self, image: np.ndarray) -> None:
+        """Update active accessory image and recompute dimensions.
+
+        Args:
+            image: 4-channel BGRA transparent accessory image.
+        """
+        if image is not None and len(image.shape) == 3 and image.shape[2] == 4:
+            self.glasses_raw = image
+            self.orig_h, self.orig_w = image.shape[:2]
+            self.aspect_ratio = self.orig_h / self.orig_w
+
     def apply(
         self,
         frame: np.ndarray,
         left_eye: Tuple[int, int],
         right_eye: Tuple[int, int],
         nose_bridge: Optional[Tuple[int, int]] = None,
+        accessory_image: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Process landmarks, transform glasses, and composite onto frame.
 
@@ -315,10 +327,14 @@ class GlassesOverlay:
             left_eye: Left eye center (px, py).
             right_eye: Right eye center (px, py).
             nose_bridge: Optional nose bridge point (px, py).
+            accessory_image: Optional 4-channel BGRA image of active accessory.
 
         Returns:
             np.ndarray: Annotated video frame.
         """
+        if accessory_image is not None:
+            self.set_accessory_image(accessory_image)
+
         # 1. Compute geometry with smoothing
         cx, cy, target_w, rot_deg = self.compute_geometry(
             left_eye, right_eye, nose_bridge

@@ -305,19 +305,30 @@ class FaceTracker:
             int(pixel_coords[self.IDX_RIGHT_TEMPLE, 1]),
         )
 
-        # Interpupillary Distance (IPD): Euclidean distance between eye centers
-        # d = sqrt((x2 - x1)^2 + (y2 - y1)^2)
-        dx_eyes = left_eye_center[0] - right_eye_center[0]
-        dy_eyes = left_eye_center[1] - right_eye_center[1]
+        # Order eye centers in screen coordinate space:
+        # screen_left has smaller X, screen_right has larger X
+        if left_eye_center[0] <= right_eye_center[0]:
+            eye_left_screen = left_eye_center
+            eye_right_screen = right_eye_center
+        else:
+            eye_left_screen = right_eye_center
+            eye_right_screen = left_eye_center
+
+        # Vector from viewer's left eye to viewer's right eye
+        # Guaranteeing dx > 0 ensures arctan2(dy, dx) is strictly within (-90, +90) degrees,
+        # centered at 0.0 degrees for an upright head without 180-degree flips.
+        dx_eyes = float(eye_right_screen[0] - eye_left_screen[0])
+        dy_eyes = float(eye_right_screen[1] - eye_left_screen[1])
         ipd = float(np.hypot(dx_eyes, dy_eyes))
 
-        # Glasses width based on temple-to-temple span
-        dx_temple = left_temple[0] - right_temple[0]
-        dy_temple = left_temple[1] - right_temple[1]
+        # Order temples from screen left to screen right for temple span
+        temple_left_x = min(left_temple[0], right_temple[0])
+        temple_right_x = max(left_temple[0], right_temple[0])
+        dx_temple = float(temple_right_x - temple_left_x)
+        dy_temple = float(right_temple[1] - left_temple[1])
         glasses_width = float(np.hypot(dx_temple, dy_temple))
 
-        # Face roll angle (head tilt) in degrees:
-        # arctan2(dy, dx) returns angle of the eye line relative to horizontal
+        # Head roll angle (tilt) relative to horizontal in degrees
         face_tilt_deg = float(np.degrees(np.arctan2(dy_eyes, dx_eyes)))
 
         return TryOnAnchors(

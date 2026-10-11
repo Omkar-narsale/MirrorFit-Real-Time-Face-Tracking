@@ -1,6 +1,7 @@
 """Main application entry point for MirrorFit.
 
-Phase 2: Real-time face detection, 478-point landmark tracking, and virtual glasses overlay.
+Phase 3: Real-time face tracking, virtual accessory catalog (glasses & sunglasses),
+anti-jitter head tracking, screenshot capture, and advanced HUD interface.
 """
 
 import argparse
@@ -17,13 +18,15 @@ if str(PROJECT_ROOT) not in sys.path:
 import cv2
 import numpy as np
 
+from src.accessory_manager import AccessoryManager
 from src.camera import Camera
 from src.face_tracker import FaceTracker, TryOnAnchors
 from src.glasses_overlay import GlassesOverlay
+from src.screenshot_service import ScreenshotService
 
 
 class MirrorFitApp:
-    """Coordinates camera capture, face tracking, virtual glasses overlay, and user interface."""
+    """Coordinates camera capture, face tracking, accessory management, rendering, and UI."""
 
     WINDOW_NAME = "MirrorFit | Virtual Try-On Studio"
 
@@ -33,9 +36,10 @@ class MirrorFitApp:
         width: int = 1280,
         height: int = 720,
         model_path: Optional[str] = None,
-        glasses_path: str = "assets/glasses/default_glasses.png",
+        assets_dir: str = "assets/glasses",
         scale_factor: float = 2.15,
         vertical_offset: float = 0.05,
+        smoothing_factor: float = 0.35,
     ) -> None:
         """Initialize the application components.
 
@@ -44,29 +48,40 @@ class MirrorFitApp:
             width: Preferred frame width in pixels.
             height: Preferred frame height in pixels.
             model_path: Optional custom path to face_landmarker.task.
-            glasses_path: Path to transparent PNG glasses asset.
+            assets_dir: Directory containing accessory PNG assets.
             scale_factor: Glasses width scale factor relative to eye distance.
             vertical_offset: Vertical offset ratio relative to glasses height.
+            smoothing_factor: Exponential smoothing weight for jitter reduction.
         """
         self.camera_index = camera_index
         self.width = width
         self.height = height
         self.model_path = model_path
-        self.glasses_path = glasses_path
+        self.assets_dir = assets_dir
         self.scale_factor = scale_factor
         self.vertical_offset = vertical_offset
+        self.smoothing_factor = smoothing_factor
 
-        # UI toggle states (Glasses active by default; mesh subtle/toggled via M)
+        # UI toggle states
         self.show_glasses = True
         self.show_mesh = False
         self.show_contours = False
         self.show_anchors = False
         self.show_hud = True
 
+        # Screenshot and notification banner tracking
+        self.notification_message: Optional[str] = None
+        self.notification_expiry: float = 0.0
+
         # FPS calculation variables
         self.prev_frame_time = time.perf_counter()
         self.smoothed_fps = 0.0
         self.fps_alpha = 0.1  # Smoothing factor (Exponential Moving Average)
+
+    def show_notification(self, message: str, duration_sec: float = 2.5) -> None:
+        """Display an on-screen notification badge on the HUD for a limited duration."""
+        self.notification_message = message
+        self.notification_expiry = time.perf_counter() + duration_sec
 
     def draw_hud(
         self,
@@ -74,6 +89,7 @@ class MirrorFitApp:
         is_detected: bool,
         fps: float,
         anchors: Optional[TryOnAnchors],
+        accessory_name: str,
     ) -> None:
         """Render a clean, modern computer vision HUD on the frame.
 
@@ -82,6 +98,7 @@ class MirrorFitApp:
             is_detected: Whether a face was detected in this frame.
             fps: Current smoothed frames-per-second value.
             anchors: Geometric fitting metrics if face detected.
+            accessory_name: Name and index of active accessory.
         """
         if not self.show_hud:
             return
@@ -89,18 +106,17 @@ class MirrorFitApp:
         h, w = frame.shape[:2]
 
         # -------------------------------------------------------------
-        # 1. Top Header Bar (Semi-transparent dark overlay)
+        # 1. Top Header Bar & Bottom Footer Bar (Semi-transparent overlay)
         # -------------------------------------------------------------
         header_height = 56
-        overlay = frame.copy()
-        cv2.rectangle(overlay, (0, 0), (w, header_height), (18, 18, 24), -1)
-
-        # Bottom Footer Bar
         footer_height = 36
+        overlay = frame.copy()
+
+        cv2.rectangle(overlay, (0, 0), (w, header_height), (18, 18, 24), -1)
         cv2.rectangle(overlay, (0, h - footer_height), (w, h), (18, 18, 24), -1)
 
-        # Blend overlay with original frame (alpha = 0.7)
-        cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+        # Blend overlay with original frame (alpha = 0.72)
+        cv2.addWeighted(overlay, 0.72, frame, 0.28, 0, frame)
 
         # Accent border lines
         cv2.line(frame, (0, header_height), (w, header_height), (60, 60, 75), 1)
@@ -109,7 +125,7 @@ class MirrorFitApp:
         # -------------------------------------------------------------
         # 2. Application Title
         # -------------------------------------------------------------
-        title_text = "MirrorFit | Virtual Try-On Studio (Phase 2)"
+        title_text = "MirrorFit | Virtual Try-On Studio"
         cv2.putText(
             frame,
             title_text,
@@ -159,7 +175,6 @@ class MirrorFitApp:
         badge_w = text_w + 36
         badge_x = (w // 2) - (badge_w // 2)
 
-        # Draw rounded badge background
         cv2.rectangle(
             frame,
             (badge_x, badge_y),
@@ -174,11 +189,7 @@ class MirrorFitApp:
             badge_border,
             1,
         )
-
-        # Status pulse dot
         cv2.circle(frame, (badge_x + 14, badge_y + (badge_h // 2)), 4, dot_color, -1, cv2.LINE_AA)
-
-        # Status text
         cv2.putText(
             frame,
             status_text,
@@ -191,59 +202,98 @@ class MirrorFitApp:
         )
 
         # -------------------------------------------------------------
-        # 5. Live Geometric Telemetry (If Face Detected)
+        # 5. Live Geometric Telemetry & Accessory Info
         # -------------------------------------------------------------
+        telemetry_y = header_height + 26
         if is_detected and anchors is not None:
-            glasses_state = "ACTIVE" if self.show_glasses else "OFF"
             telemetry_text = (
-                f"Glasses: {glasses_state}  |  Tilt: {anchors.face_tilt_deg:+.1f} deg  |  "
+                f"Item: {accessory_name}  |  "
+                f"Tilt: {anchors.face_tilt_deg:+.1f} deg  |  "
                 f"IPD: {anchors.interpupillary_distance_px:.0f}px  |  "
                 f"Span: {anchors.glasses_width_px:.0f}px"
             )
-            telemetry_y = header_height + 26
-            (t_w, _), _ = cv2.getTextSize(telemetry_text, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)
+        else:
+            telemetry_text = f"Item: {accessory_name}  |  Tracking paused (no face)"
+
+        (t_w, _), _ = cv2.getTextSize(telemetry_text, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)
+        cv2.rectangle(
+            frame,
+            (16, telemetry_y - 18),
+            (16 + t_w + 16, telemetry_y + 8),
+            (20, 20, 25),
+            -1,
+        )
+        cv2.rectangle(
+            frame,
+            (16, telemetry_y - 18),
+            (16 + t_w + 16, telemetry_y + 8),
+            (60, 60, 75),
+            1,
+        )
+        cv2.putText(
+            frame,
+            telemetry_text,
+            (24, telemetry_y - 1),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.42,
+            (210, 225, 255),
+            1,
+            cv2.LINE_AA,
+        )
+
+        # -------------------------------------------------------------
+        # 6. Temporary On-Screen Notification Banner (e.g. Screenshot Saved)
+        # -------------------------------------------------------------
+        now = time.perf_counter()
+        if self.notification_message and now < self.notification_expiry:
+            banner_text = self.notification_message
+            (n_w, _), _ = cv2.getTextSize(banner_text, cv2.FONT_HERSHEY_SIMPLEX, 0.52, 1)
+            banner_x = (w // 2) - (n_w // 2) - 16
+            banner_y = h - footer_height - 38
+
             cv2.rectangle(
                 frame,
-                (16, telemetry_y - 18),
-                (16 + t_w + 16, telemetry_y + 8),
-                (20, 20, 25),
+                (banner_x, banner_y - 20),
+                (banner_x + n_w + 32, banner_y + 12),
+                (25, 120, 60),
                 -1,
             )
             cv2.rectangle(
                 frame,
-                (16, telemetry_y - 18),
-                (16 + t_w + 16, telemetry_y + 8),
-                (60, 60, 75),
+                (banner_x, banner_y - 20),
+                (banner_x + n_w + 32, banner_y + 12),
+                (80, 255, 120),
                 1,
             )
             cv2.putText(
                 frame,
-                telemetry_text,
-                (24, telemetry_y - 1),
+                banner_text,
+                (banner_x + 16, banner_y),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.42,
-                (200, 220, 255),
+                0.52,
+                (255, 255, 255),
                 1,
                 cv2.LINE_AA,
             )
 
         # -------------------------------------------------------------
-        # 6. Bottom Navigation and Keyboard Controls Footer
+        # 7. Bottom Navigation & Keyboard Controls Footer
         # -------------------------------------------------------------
         footer_text = (
-            "Controls: [Q/ESC] Exit  |  "
+            "Controls: [1-4] Styles  |  "
+            "[N/P] Next/Prev  |  "
+            "[S] Save Screenshot  |  "
+            "[R] Reset Filter  |  "
             f"[G] Glasses: {'ON' if self.show_glasses else 'OFF'}  |  "
-            f"[M] Mesh: {'ON' if self.show_mesh else 'OFF'}  |  "
-            f"[A] Anchors: {'ON' if self.show_anchors else 'OFF'}  |  "
-            "[H] Toggle HUD"
+            "[Q/ESC] Exit"
         )
         cv2.putText(
             frame,
             footer_text,
             (20, h - 12),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.45,
-            (190, 190, 205),
+            0.42,
+            (195, 195, 210),
             1,
             cv2.LINE_AA,
         )
@@ -267,10 +317,10 @@ class MirrorFitApp:
 
     def run(self) -> None:
         """Run the main capture, tracking, overlay, rendering, and event loop."""
-        print("=" * 68)
-        print("  MirrorFit | Real-Time Virtual Try-On Studio (Phase 2)")
-        print("=" * 68)
-        print("Initializing webcam, MediaPipe Face Landmarker, and Glasses Overlay...")
+        print("=" * 70)
+        print("  MirrorFit | Real-Time Virtual Try-On Studio (Phase 3)")
+        print("=" * 70)
+        print("Initializing webcam, MediaPipe Face Landmarker, and Accessory Catalog...")
 
         # 1. Initialize Face Tracker
         try:
@@ -282,20 +332,26 @@ class MirrorFitApp:
             print(f"[Error] Failed to initialize Face Tracker: {exc}")
             sys.exit(1)
 
-        # 2. Initialize Glasses Overlay Engine
+        # 2. Initialize Accessory Manager (Loads all transparent PNGs)
         try:
-            glasses_overlay = GlassesOverlay(
-                asset_path=self.glasses_path,
-                scale_factor=self.scale_factor,
-                vertical_offset_ratio=self.vertical_offset,
-            )
-            print(f"[MirrorFit] Loaded glasses asset successfully from '{self.glasses_path}'.")
-        except (FileNotFoundError, ValueError) as err:
-            print(f"\n[Asset Error] {err}")
+            accessory_mgr = AccessoryManager(assets_dir=self.assets_dir)
+        except FileNotFoundError as err:
+            print(err)
             face_tracker.close()
             sys.exit(1)
 
-        # 3. Initialize Camera
+        # 3. Initialize Glasses Overlay Engine
+        glasses_overlay = GlassesOverlay(
+            asset_path=os.path.join(self.assets_dir, accessory_mgr.current_item.filename),
+            scale_factor=self.scale_factor,
+            vertical_offset_ratio=self.vertical_offset,
+            smoothing_factor=self.smoothing_factor,
+        )
+
+        # 4. Initialize Screenshot Service
+        screenshot_service = ScreenshotService()
+
+        # 5. Initialize Camera
         try:
             camera = Camera(
                 device_index=self.camera_index,
@@ -311,7 +367,7 @@ class MirrorFitApp:
 
         actual_w, actual_h = camera.get_resolution()
         print(f"[MirrorFit] Camera started successfully at {actual_w}x{actual_h} resolution.")
-        print("[MirrorFit] Ready! Press [G] to toggle glasses, [M] for mesh, and [Q]/[ESC] to exit.\n")
+        print("[MirrorFit] Ready! Press [1-4] for styles, [S] for screenshot, [R] to reset smoothing, and [Q]/[ESC] to exit.\n")
 
         cv2.namedWindow(self.WINDOW_NAME, cv2.WINDOW_AUTOSIZE)
 
@@ -329,13 +385,14 @@ class MirrorFitApp:
                 )
 
                 if is_detected and anchors is not None:
-                    # 3. Apply Virtual Glasses Overlay
+                    # 3. Apply active virtual glasses overlay
                     if self.show_glasses:
                         glasses_overlay.apply(
                             frame=frame,
                             left_eye=anchors.left_eye_center,
                             right_eye=anchors.right_eye_center,
                             nose_bridge=anchors.nose_bridge,
+                            accessory_image=accessory_mgr.current_image,
                         )
 
                     # 4. Optional landmark visualization overlay
@@ -349,7 +406,7 @@ class MirrorFitApp:
                             show_anchors=self.show_anchors,
                         )
                 else:
-                    # When no face is detected, reset temporal filter so glasses don't lag on return
+                    # When face is absent, reset temporal filter so accessories don't lag on return
                     glasses_overlay.reset_filter()
 
                 # 5. Calculate smoothed FPS
@@ -361,6 +418,7 @@ class MirrorFitApp:
                     is_detected=is_detected,
                     fps=current_fps,
                     anchors=anchors,
+                    accessory_name=accessory_mgr.current_name,
                 )
 
                 # 7. Display frame in window
@@ -371,6 +429,20 @@ class MirrorFitApp:
                 if key in (ord("q"), ord("Q"), 27):  # 27 is ESC key
                     print("\n[MirrorFit] Exit requested by user. Shutting down...")
                     break
+                elif key in (ord("1"), ord("2"), ord("3"), ord("4")):
+                    accessory_mgr.select_by_key(int(chr(key)))
+                elif key in (ord("n"), ord("N")):
+                    accessory_mgr.next_accessory()
+                elif key in (ord("p"), ord("P")):
+                    accessory_mgr.prev_accessory()
+                elif key in (ord("s"), ord("S")):
+                    saved_path = screenshot_service.capture(frame, accessory_mgr.current_item.name)
+                    if saved_path:
+                        self.show_notification(f"Screenshot Saved: {os.path.basename(saved_path)}")
+                elif key in (ord("r"), ord("R")):
+                    glasses_overlay.reset_filter()
+                    print("[MirrorFit] Tracking smoothing filter reset.")
+                    self.show_notification("Tracking Smoothing Reset")
                 elif key in (ord("g"), ord("G")):
                     self.show_glasses = not self.show_glasses
                     print(f"[MirrorFit] Glasses overlay: {'ON' if self.show_glasses else 'OFF'}")
@@ -400,7 +472,7 @@ class MirrorFitApp:
 def main() -> None:
     """Parse command line arguments and execute the application."""
     parser = argparse.ArgumentParser(
-        description="MirrorFit Phase 2: Real-Time Virtual Glasses Overlay"
+        description="MirrorFit Phase 3: Advanced Head Tracking and Accessory Selection"
     )
     parser.add_argument(
         "--camera",
@@ -427,10 +499,10 @@ def main() -> None:
         help="Custom path to face_landmarker.task model file",
     )
     parser.add_argument(
-        "--glasses",
+        "--assets",
         type=str,
-        default="assets/glasses/default_glasses.png",
-        help="Path to transparent PNG glasses asset (default: assets/glasses/default_glasses.png)",
+        default="assets/glasses",
+        help="Path to directory containing accessory PNG assets (default: assets/glasses)",
     )
     parser.add_argument(
         "--scale",
@@ -444,6 +516,12 @@ def main() -> None:
         default=0.05,
         help="Vertical offset ratio for glasses positioning (default: 0.05)",
     )
+    parser.add_argument(
+        "--smoothing",
+        type=float,
+        default=0.35,
+        help="Exponential smoothing weight beta in [0.1, 1.0] (default: 0.35)",
+    )
 
     args = parser.parse_args()
     app = MirrorFitApp(
@@ -451,9 +529,10 @@ def main() -> None:
         width=args.width,
         height=args.height,
         model_path=args.model,
-        glasses_path=args.glasses,
+        assets_dir=args.assets,
         scale_factor=args.scale,
         vertical_offset=args.offset,
+        smoothing_factor=args.smoothing,
     )
     app.run()
 
