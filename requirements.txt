@@ -1,4 +1,4 @@
-# MirrorFit - Real-Time Virtual Try-On Studio (Phase 1 Dependencies)
+# MirrorFit XR - 3D Augmented Reality & Intelligent Face Fitting
 # Compatible with Python 3.10 to 3.13 on Windows
 
 opencv-python>=4.8.0,<5.1.0

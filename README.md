@@ -1,16 +1,17 @@
-# MirrorFit | Real-Time Virtual Try-On Studio (Phases 1, 2 & 3)
+# MirrorFit XR | 3D Augmented Reality & Intelligent Face Fitting (Phase 4)
 
-MirrorFit is a real-time computer vision application that tracks facial landmarks and overlays virtual accessories using **Python**, **OpenCV**, **MediaPipe**, and **NumPy**.
+**MirrorFit XR** is a real-time computer vision and augmented reality application that tracks 3D head pose, performs real-time face segmentation, and renders shaded 3D polygonal accessories using **Python**, **OpenCV**, **MediaPipe**, and **NumPy**.
 
 * **Phase 1:** High-speed webcam capture, 478-point 3D facial landmark detection, and HUD telemetry.
-* **Phase 2:** Real-time **Virtual Glasses Overlay** with proportional scaling, head tilt rotation, boundary clipping, and vectorized alpha compositing.
-* **Phase 3:** **Advanced Head Tracking & Accessory Selection**:
-  * Corrected head tilt rotation geometry (upright head strictly $\approx 0.0^\circ$, no $\pm 180^\circ$ flips).
-  * Anti-jitter Exponential Moving Average (EMA) smoothing for position, width, and rotation.
-  * Multi-accessory catalog supporting transparent PNG glasses and sunglasses.
-  * Direct numeric key selection (`1`–`4`) and sequential cycling (`N`/`P`).
-  * On-demand tracking filter reset (`R`).
-  * High-resolution timestamped screenshot capture (`S`) to `output/screenshots/`.
+* **Phase 2:** Virtual glasses overlay with dynamic scaling, head tilt rotation, boundary clipping, and alpha compositing.
+* **Phase 3:** Anti-jitter temporal smoothing, multi-accessory 2D catalog, and timestamped screenshot service.
+* **Phase 4 (Current):** **3D Augmented Reality Prototype**:
+  * 6-DOF Head Pose Estimation (**Yaw**, **Pitch**, **Roll**) via `cv2.solvePnP` with 3D coordinate axes visualization.
+  * Real-time portrait and face segmentation inference using MediaPipe `selfie_segmenter.tflite`.
+  * Dedicated, decoupled **Intelligent Fitting Engine**.
+  * Projective **3D Accessory Renderer** loading Wavefront OBJ models with depth-sorted polygon shading.
+  * Runtime mode switching between **3D AR Model Mode** and **2D Overlay Mode**.
+  * Detailed performance monitoring (FPS, total frame latency, pose latency, and segmentation latency).
 
 ---
 
@@ -19,24 +20,32 @@ MirrorFit is a real-time computer vision application that tracks facial landmark
 ```
 MirrorFit/
 ├── assets/
-│   └── glasses/
-│       ├── default_glasses.png # Standard dark-rim glasses
-│       ├── classic_glasses.png # Rectangular smart browline frames
-│       ├── round_glasses.png   # Retro circular spectacles
-│       └── sunglasses.png      # Dark polarized Aviator sunglasses
+│   ├── glasses/                # 2D Transparent PNG accessory assets
+│   │   ├── default_glasses.png
+│   │   ├── classic_glasses.png
+│   │   ├── round_glasses.png
+│   │   └── sunglasses.png
+│   └── models_3d/              # 3D Accessory models
+│       └── glasses_3d.obj      # 3D Wavefront OBJ glasses mesh
 ├── models/
-│   └── face_landmarker.task    # Google MediaPipe Face Landmarker model bundle
+│   ├── face_landmarker.task    # Google MediaPipe 478-point Face Landmarker (~3.76 MB)
+│   └── selfie_segmenter.tflite # Google MediaPipe Image Segmenter (~250 KB)
 ├── output/
-│   └── screenshots/            # Timestamped screenshots directory
+│   └── screenshots/            # Timestamped screenshot captures
 ├── src/
 │   ├── __init__.py             # Package exports
-│   ├── accessory_manager.py    # Multi-accessory catalog & runtime switcher
-│   ├── camera.py               # Camera capture, DirectShow backend, & mirroring
+│   ├── accessory_manager.py    # 2D Multi-accessory catalog & switcher
+│   ├── camera.py               # DirectShow camera acquisition & mirroring
+│   ├── face_segmentation.py    # MediaPipe face segmentation module
 │   ├── face_tracker.py         # 478-point landmark tracker & geometric anchors
-│   ├── glasses_overlay.py      # Scaling, unclipped rotation, & alpha blending
-│   ├── main.py                 # Application loop, HUD overlay, & keyboard controls
-│   └── screenshot_service.py   # High-resolution screenshot capture service
-├── requirements.txt            # Compatible Python dependencies
+│   ├── fitting_engine.py       # Decoupled 3D transformation & fitting engine
+│   ├── glasses_overlay.py      # 2D Scaling, rotation, & alpha compositing
+│   ├── head_pose.py            # 6-DOF solvePnP head pose estimator & axes
+│   ├── performance_monitor.py  # Latency tracking and smoothed FPS calculation
+│   ├── renderer_3d.py          # Projective 3D OBJ mesh renderer & shader
+│   ├── screenshot_service.py   # High-resolution screenshot capture service
+│   └── main.py                 # Application orchestrator, HUD, & hotkey controls
+├── requirements.txt            # Compatible dependencies
 ├── README.md                   # Full documentation, math theory, & testing plan
 └── .gitignore                  # Ignored environments, cache, & artifacts
 ```
@@ -74,15 +83,19 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### Step 4: Run MirrorFit Phase 3
+### Step 4: Run MirrorFit XR
 Launch the application:
 ```powershell
 python src/main.py
 ```
-
-#### Optional Customization Flags:
+or as a module:
 ```powershell
-# Adjust glasses scale multiplier (default: 2.15)
+python -m src.main
+```
+
+#### Optional CLI Customization Flags:
+```powershell
+# Adjust 3D/2D glasses scale multiplier (default: 2.15)
 python src/main.py --scale 2.20
 
 # Adjust vertical offset ratio relative to glasses height (default: 0.05)
@@ -91,99 +104,130 @@ python src/main.py --offset 0.06
 # Adjust anti-jitter smoothing factor beta in [0.1, 1.0] (default: 0.35)
 python src/main.py --smoothing 0.30
 
+# Specify custom 3D model asset
+python src/main.py --model3d assets/models_3d/glasses_3d.obj
+
 # Specify custom camera index and resolution
 python src/main.py --camera 0 --width 1280 --height 720
 ```
 
 ---
 
-## 3. Keyboard Controls
+## 3. Keyboard Controls Reference
 
 | Key | Action |
 | :--- | :--- |
-| **1** | Select **Default Glasses** |
-| **2** | Select **Classic Glasses** (Rectangular smart frames) |
-| **3** | Select **Round Glasses** (Retro circular spectacles) |
-| **4** | Select **Sunglasses** (Dark Aviator frames) |
-| **N** | Cycle to the **Next** available accessory |
-| **P** | Cycle to the **Previous** available accessory |
+| **T** | Toggle between **3D AR Model Mode** and **2D Overlay Mode** |
+| **X** | Toggle **3D Head Pose Coordinate Axes** on/off (Red=X, Green=Y, Blue=Z) |
+| **B** | Toggle **Face Segmentation Mask Overlay** on/off |
+| **1** | Select **Default Glasses** (switches to 2D mode) |
+| **2** | Select **Classic Glasses** (switches to 2D mode) |
+| **3** | Select **Round Glasses** (switches to 2D mode) |
+| **4** | Select **Sunglasses** (switches to 2D mode) |
+| **N** / **P** | Cycle to Next / Previous 2D accessory |
 | **S** | Capture and save a timestamped screenshot to `output/screenshots/` |
-| **R** | Reset temporal tracking smoothing filter |
-| **G** | Toggle Virtual Glasses Overlay on/off |
+| **R** | Reset temporal tracking smoothing filters (both head pose and 2D overlay) |
+| **G** | Toggle glasses visibility on/off |
 | **M** | Toggle facial mesh wireframe on/off |
-| **A** | Toggle try-on geometric anchor markers on/off |
+| **A** | Toggle try-on geometric anchor points on/off |
 | **H** | Toggle HUD overlay (header, metrics, and badges) |
 | **Q** or **ESC** | Safely exit application and release camera |
 
 ---
 
-## 4. Technical Analysis & Mathematical Foundations
+## 4. Technical Analysis & Mathematical Architecture
 
-### 1. The Head Rotation Fix (Why -177.8° Occurred and How It Was Solved)
-* **The Root Cause:** In a mirrored video feed (`cv2.flip(frame, 1)`), the subject's anatomical left eye (MediaPipe landmark 468) appears on the viewer's left side of the screen ($X \approx 500$), while the subject's anatomical right eye (landmark 473) appears on the viewer's right side ($X \approx 700$).
-* When computing $dx = X_{\text{left\_eye}} - X_{\text{right\_eye}}$, the result was $500 - 700 = -200$ (a **negative** number).
-* In trigonometry, $\arctan2(dy, dx)$ with a negative $dx$ and near-zero $dy$ points backwards along the negative X-axis ($180^\circ$ or $-180^\circ$). If $dy$ fluctuated slightly negative (e.g. $-7\text{px}$), the angle calculated to:
-  $$\arctan2(-7, -200) \times \frac{180}{\pi} = -177.99^\circ$$
-  Furthermore, minor vertical micro-movements caused the angle to violently jump between $+178^\circ$ and $-178^\circ$.
-* **The Solution:** We order eye positions in viewer screen space before computing the displacement vector:
-  $$P_L = \text{eye with smaller } X \quad (\text{screen left})$$
-  $$P_R = \text{eye with larger } X \quad (\text{screen right})$$
-  $$\Delta X = X_R - X_L > 0 \quad (\text{strictly positive!})$$
-  $$\Delta Y = Y_R - Y_L$$
-  Because $\Delta X > 0$, $\arctan2(\Delta Y, \Delta X)$ is mathematically guaranteed to fall strictly within:
-  $$\theta \in (-90^\circ, +90^\circ)$$
-  * Upright, level head $\implies \Delta Y \approx 0 \implies \mathbf{\theta \approx 0.0^\circ}$.
-  * Clockwise tilt (right eye lower) $\implies \Delta Y > 0 \implies \mathbf{\theta > 0^\circ}$.
-  * Counter-clockwise tilt (right eye higher) $\implies \Delta Y < 0 \implies \mathbf{\theta < 0^\circ}$.
+### 1. 6-DOF Head Pose Estimation via OpenCV solvePnP
+Instead of approximating head orientation using a 2D line between eyes, MirrorFit XR computes full 3D rotation and translation vectors $[R \mid \mathbf{t}]$ using perspective-n-point geometry (`cv2.solvePnP`):
 
-### 2. OpenCV Rotation Angle Convention
-In standard 2D image coordinates, the $+Y$ axis points **downward**.
-* When a user tilts clockwise, the right eye drops downward ($\Delta Y > 0 \implies \theta > 0$).
-* In OpenCV, `cv2.getRotationMatrix2D(center, angle, 1.0)` rotates **counter-clockwise** for positive angle arguments.
-* Therefore, to rotate horizontal glasses clockwise to match the head tilt, the angle passed to OpenCV is:
-  $$\text{Angle}_{\text{OpenCV}} = -\theta$$
+#### A. Canonical 3D Anthropometric Model
+We define canonical anatomical reference landmarks in millimeters, aligned with OpenCV's camera coordinate frame ($+X$ right, $+Y$ down, $+Z$ forward):
+* **Nose Tip:** $(0, 0, 0)$ (Landmark 4)
+* **Chin:** $(0, 85, -25)$ (Landmark 152)
+* **Left Eye Outer:** $(-65, -40, -40)$ (Landmark 263)
+* **Right Eye Outer:** $(65, -40, -40)$ (Landmark 33)
+* **Left Mouth Corner:** $(-45, 45, -35)$ (Landmark 291)
+* **Right Mouth Corner:** $(45, 45, -35)$ (Landmark 61)
+* **Glabella / Nose Bridge:** $(0, -45, -30)$ (Landmark 168)
 
-### 3. Anti-Jitter Temporal Smoothing (Exponential Moving Average)
-Sensory camera noise causes landmark pixel coordinates to fluctuate by 1–2 pixels every frame. We apply an Exponential Moving Average (EMA) filter:
-$$S_t = \beta \cdot M_t + (1 - \beta) \cdot S_{t-1}$$
-where $\beta = 0.35$ (configurable via `--smoothing`).
-* When face tracking is lost, `reset_filter()` clears $S_{t-1}$ so stale coordinates are never used.
-* Pressing `R` manually resets the filter state on demand.
+#### B. Camera Intrinsic Calibration Matrix
+We build the pinhole camera matrix $K$ from the active video resolution $(W, H)$:
+$$K = \begin{bmatrix} f_x & 0 & c_x \\ 0 & f_y & c_y \\ 0 & 0 & 1 \end{bmatrix}$$
+where $f_x = f_y = W$, $c_x = W / 2$, $c_y = H / 2$, and distortion coefficients $D = [0, 0, 0, 0]^T$.
 
-### 4. Vectorized Alpha Compositing & Viewport Boundary Clipping
-For 4-channel BGRA overlays on 3-channel BGR frames:
-$$\alpha = \frac{\text{Overlay}_{\text{alpha}}}{255.0} \in [0.0, 1.0]$$
-$$\text{Pixel}_{\text{out}} = \alpha \times \text{Overlay}_{\text{BGR}} + (1.0 - \alpha) \times \text{Frame}_{\text{BGR}}$$
-When users move close to the edge of the webcam frame, target coordinates are clamped to $[0, W_{\text{frame}}] \times [0, H_{\text{frame}}]$, and the overlapping region of the accessory is sliced. This prevents array shape mismatches and OpenCV indexing crashes.
+#### C. Euler Angle Decomposition (Yaw, Pitch, Roll)
+`solvePnP` returns rotation vector $\mathbf{r}$ and translation vector $\mathbf{t}$. Using `cv2.Rodrigues`, we recover rotation matrix $R \in \mathbb{R}^{3 \times 3}$. We extract Euler angles:
+$$\text{Pitch} = \arctan2(R_{21}, R_{22}) \times \frac{180}{\pi}$$
+$$\text{Yaw} = \arctan2(-R_{20}, \sqrt{R_{00}^2 + R_{10}^2}) \times \frac{180}{\pi}$$
+$$\text{Roll} = \arctan2(R_{10}, R_{00}) \times \frac{180}{\pi}$$
+
+* **Yaw:** Horizontal head turn (left/right).
+* **Pitch:** Vertical nod (up/down).
+* **Roll:** Lateral head tilt (clockwise/counter-clockwise).
 
 ---
 
-## 5. Manual Testing Checklist (Tests A through L)
+### 2. Intelligent Fitting Engine
+The fitting engine is strictly decoupled from the rendering pipeline. Its responsibility is calculating the homogeneous transformation:
+$$T_{\text{accessory}\to\text{cam}} = \begin{bmatrix} R_{\text{head}} \cdot S & \mathbf{t}_{\text{accessory}} \\ \mathbf{0} & 1 \end{bmatrix}$$
+where:
+$$\mathbf{t}_{\text{accessory}} = \mathbf{t}_{\text{head}} + R_{\text{head}} \cdot \mathbf{offset}_{\text{local}}$$
+This positions the 3D model directly on the nose saddle while allowing independent scaling ($S$) and fine depth adjustments without modifying camera or pose tracking code.
 
-| Test | Action | Expected Behavior | Failure Check |
+---
+
+### 3. Projective 3D Mesh Rendering
+The 3D renderer parses Wavefront OBJ models (`assets/models_3d/glasses_3d.obj`) and composites them onto the video feed:
+1. **Model Coordinates:** Vertices $V \in \mathbb{R}^{N \times 3}$ define front rims, bridge, and 3D temple arms extending back towards the ears ($Z \approx -100\text{ mm}$).
+2. **Pose Transformation:** Vertices are transformed to camera space:
+   $$\mathbf{v}_{\text{cam}} = R (S \mathbf{v}) + \mathbf{t}_{\text{acc}}$$
+3. **Perspective Projection:** Projected into 2D screen coordinates using $K$ (`cv2.projectPoints`).
+4. **Painter's Algorithm (Depth Sorting):** Faces are sorted by average camera depth $Z_{\text{cam}}$ from back to front (farthest rendered first, nearest rendered last).
+5. **Lambertian Directional Shading:** For key light $\mathbf{L}$:
+   $$I = I_{\text{ambient}} + I_{\text{diffuse}} \max(0, \mathbf{n} \cdot \mathbf{L})$$
+   Polygons are filled using anti-aliased shading (`cv2.fillPoly` and `cv2.polylines`).
+
+---
+
+### 4. Real-Time Face Segmentation
+* **Model:** Google MediaPipe Image Segmenter (`selfie_segmenter.tflite`).
+* **Official URL:** `https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite` (~250 KB).
+* **Latency:** Benchmarked at ~10–25 ms on CPU.
+* **Fallback:** If the model file is absent, segmentation disables cleanly while 3D and 2D accessory rendering continues uninterrupted.
+
+---
+
+## 5. Conceptual Differences in Computer Vision Techniques
+
+| Concept | Dimensionality | Description | Usage in MirrorFit XR |
 | :--- | :--- | :--- | :--- |
-| **A. Upright View** | Look straight at camera. | Tilt angle displays near $0.0^\circ$ ($\pm 1.5^\circ$), glasses sit level on nose bridge. | Check that `dx = eye_right - eye_left > 0`. |
-| **B. Move Left / Right** | Move head horizontally across frame. | Glasses follow smoothly without lag or spatial offset. | Verify webcam mirroring happens before landmark inference. |
-| **C. Move Up / Down** | Move head vertically up and down. | Glasses maintain alignment on the nose saddle. | Verify nose bridge anchor blending. |
-| **D. Move Closer / Farther** | Step close to and away from the camera. | Glasses smoothly scale up and down proportional to eye distance. | Verify `target_width = IPD * scale_factor`. |
-| **E. Tilt Head Left** | Tilt head counter-clockwise. | Tilt displays negative degrees (e.g. $-12^\circ$), glasses rotate to match eye line. | Check OpenCV rotation sign (`-angle`). |
-| **F. Tilt Head Right** | Tilt head clockwise. | Tilt displays positive degrees (e.g. $+14^\circ$), glasses rotate to match eye line. | Check OpenCV rotation sign (`-angle`). |
-| **G. Turn Head Sideways** | Turn head moderately left and right. | Glasses remain centered over visible eye span. | Ensure minimum scale boundary clamp ($W \ge 20$). |
-| **H. Leave Camera View** | Step completely out of camera frame. | Glasses disappear instantly; status displays `NO FACE DETECTED`. | Verify `is_detected` skips overlay when no face is found. |
-| **I. Return to View** | Step back into camera frame. | Glasses reappear at the new position without jumping or lagging. | Verify `reset_filter()` was called during absence. |
-| **J. Switch Accessories** | Press `1`, `2`, `3`, `4`, and `N` / `P`. | Active accessory changes immediately; name updates on HUD. | Check that all 4 PNG assets exist in `assets/glasses/`. |
-| **K. Save Screenshot** | Press `S`. | Screenshot saved to `output/screenshots/`; on-screen confirmation banner flashes. | Verify write permissions in `output/screenshots/`. |
-| **L. Exit Cleanly** | Press `Q` or `ESC`. | Window closes immediately, camera hardware handle is released, clean exit. | Verify `finally:` cleanup block in `main.py`. |
+| **2D Image Overlay** | 2D $(u, v)$ | Flat 4-channel PNG resized and rotated in image space. | Fast fallback mode (`[T]` key) with classic sunglasses styles. |
+| **Head Pose Estimation** | 3D $(X, Y, Z, \theta, \phi, \psi)$ | Calculates 6-DOF camera pose ($R, \mathbf{t}$) and Euler angles via `solvePnP`. | Computes Yaw, Pitch, Roll to drive true 3D spatial orientation. |
+| **3D Model Rendering** | 3D $\rightarrow$ 2D | Projects a 3D polygonal mesh with depth sorting and directional lighting. | Primary AR mode (`[T]` key) showing 3D perspective and temple arms. |
+| **Face Segmentation** | 2D Pixel Mask | Neural network classifying each pixel as foreground person vs background. | Debug visualization (`[B]` key) and background matting foundation. |
+| **Depth Occlusion** | 3D Depth Buffer | Per-pixel Z-buffering where foreground face geometry occludes accessory parts. | Documented below as an active research area for Phase 5. |
 
 ---
 
-## 6. Troubleshooting Guide
+## 6. Known Limitations
 
-| Symptom | Probable Cause | Recommended Resolution |
-| :--- | :--- | :--- |
-| **Tilt angle reads near $\pm 180^\circ$** | Eye coordinate order inverted | Ensure `eye_left_screen` and `eye_right_screen` are sorted by X coordinate so $\Delta X > 0$ strictly. |
-| **Accessory PNG not found** | File moved or renamed | Verify `assets/glasses/` contains `default_glasses.png`, `classic_glasses.png`, `round_glasses.png`, and `sunglasses.png`. |
-| **Glasses rotate in reverse** | Inverted rotation sign | Ensure OpenCV rotation angle is set to `-angle_deg`. |
-| **Glasses jitter during slight motion** | Landmark detection noise | Lower smoothing factor: `python src/main.py --smoothing 0.25` for smoother response. |
-| **Screenshot directory error** | Permissions issue | Run VS Code terminal as standard user; directory `output/screenshots/` is created automatically. |
-| **Low FPS (< 20 FPS)** | Dense mesh wireframe rendering overhead | Press **M** to toggle off the 478-point wireframe mesh. |
+1. **Approximate Camera Calibration:** In the absence of a per-camera checkerboard calibration file, the focal length is estimated as $f = W$ (approx. 65° field of view). Minor radial distortion from wide-angle lenses may introduce slight perspective deviations at extreme frame borders.
+2. **Ear Occlusion:** Currently, 3D temple arms render using Painter's depth sorting. Behind-the-ear occlusion is approximated; full physical ear occlusion requires depth-map volumetric compositing (scheduled for Phase 5).
+
+---
+
+## 7. Manual Testing Checklist (Tests A through K)
+
+| Test | Action | Expected Result | Troubleshooting / Failure Check |
+| :--- | :--- | :--- | :--- |
+| **A. Upright View** | Look straight at the camera. | Yaw $\approx 0^\circ$, Pitch $\approx -6^\circ$, Roll $\approx 0^\circ$; 3D glasses sit level across the nose saddle. | Check that `dx = eye_right - eye_left > 0`. |
+| **B. Head Tilt** | Tilt head left and right. | 3D glasses rotate smoothly matching Roll angle. | Verify rotation sign in `HeadPoseEstimator`. |
+| **C. Turn Sideways (Yaw)** | Turn head 30° to the left and right. | The 3D model exhibits genuine perspective foreshortening: the far rim shrinks and the near temple arm extends back. | Press `X` to inspect 3D pose axes. |
+| **D. Move Close / Far** | Step closer and farther from camera. | Fitting engine scales the 3D model dynamically matching face size. | Verify `compute_fitting` scale calculation. |
+| **E. Enable Segmentation** | Press `B`. | A green semi-transparent segmentation mask highlights the user's face and body; segmentation latency displays on the HUD. | Ensure `models/selfie_segmenter.tflite` is present. |
+| **F. Disable Segmentation** | Press `B` again. | Segmentation mask disappears, latency reduces, application runs smoothly. | Verify `show_segmentation = False` skips inference. |
+| **G. Leave Camera Frame** | Step out of camera view. | Glasses disappear immediately; status badge turns red (`NO FACE DETECTED`). When returning, tracking recovers without jumping. | Verify `reset()` clears smoothing filters. |
+| **H. Enable Pose Axes** | Press `X`. | Red (X), Green (Y), and Blue (Z) 3D coordinate axes project directly from the tip of the nose. | Verify `draw_axes` in `HeadPoseEstimator`. |
+| **I. Performance Telemetry** | Inspect top-right HUD banner. | FPS ($\sim 30\text{--}60$), total frame latency, and segmentation latency update in real time. | Verify `PerformanceMonitor` records. |
+| **J. Run Without 3D Model** | Rename `glasses_3d.obj`. | App displays warning on startup and falls back gracefully to 2D overlay mode without crashing. | Verify `Renderer3D.is_available = False` fallback. |
+| **K. Exit Application** | Press `Q` or `ESC`. | OpenCV window closes, camera and segmentation resources release cleanly, application shuts down. | Verify `finally:` cleanup block in `main.py`. |
